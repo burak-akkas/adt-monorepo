@@ -51,8 +51,17 @@ export function accountErrorMessage(error: AuthApiError): string {
   return GENERIC_ERROR;
 }
 
-export function authErrorMessage(mode: AuthMode, error: AuthApiError): string {
+/** Better Auth's 429 carries X-Retry-After (seconds). Without a usable value we say "in a minute", the default window. */
+export function rateLimitMessage(retryAfter?: string | null): string {
+  const seconds = Number(retryAfter);
+  if (!retryAfter || !Number.isFinite(seconds) || seconds <= 0) return "Too many attempts, try again in a minute.";
+  const wait = Math.ceil(seconds);
+  return `Too many attempts, try again in ${wait} ${wait === 1 ? "second" : "seconds"}.`;
+}
+
+export function authErrorMessage(mode: AuthMode, error: AuthApiError, retryAfter?: string | null): string {
   if (!error) return GENERIC_ERROR;
+  if (error.status === 429) return rateLimitMessage(retryAfter);
   if (mode === "login") {
     // Same message for every credentials failure: never reveal whether the email exists.
     const status = error.status ?? 0;

@@ -14,6 +14,11 @@ export API_URL="http://localhost:$api_port"
 export BETTER_AUTH_URL="http://localhost:$web_port"
 export BETTER_AUTH_SECRET="dev-only-stack-secret-not-for-production-0123456789"
 export INTERNAL_API_KEY="dev-only-internal-api-key-not-for-production"
+# Relaxed auth rate limits: the e2e suite and QA register and log in many times from one machine within a minute.
+# The limiter stays on (production sets none of these and keeps 5 sign-in/sign-up attempts per 60 s per visitor).
+# tests/e2e/web/rate-limit.spec.ts relies on the sign-in limit being 200.
+export AUTH_RATE_LIMIT_SIGN_IN_MAX="200"
+export AUTH_RATE_LIMIT_MAX="5000"
 export COMMIT_SHA="$(git rev-parse --verify -q HEAD || echo dev)"
 
 npm run db:migrate:deploy -w apps/api

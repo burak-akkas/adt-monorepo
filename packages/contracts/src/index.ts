@@ -20,6 +20,10 @@ export type HealthResponse = z.infer<typeof healthResponseSchema>;
 // The header the web app's server adds to every request it forwards to the API. The name only, never a value.
 export const INTERNAL_API_KEY_HEADER = "x-internal-api-key";
 
+// The header the web app's server sets to the visitor's IP address (replacing anything the browser sent). The API
+// trusts only this one for rate limiting. The name only, never a value.
+export const VISITOR_IP_HEADER = "x-visitor-ip";
+
 // Accounts. The auth endpoints themselves belong to Better Auth, mounted at /auth in the API.
 export const PASSWORD_MIN_LENGTH = 10;
 export const PASSWORD_MAX_LENGTH = 128;
