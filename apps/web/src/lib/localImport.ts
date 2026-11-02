@@ -50,7 +50,7 @@ function toImportCard(card: Card): ImportCard {
     checklist: (card.checklist ?? []).map(({ text, done }) => ({ text, done })),
     comments: (card.comments ?? []).map(({ text, createdAt, editedAt }) => ({ text, createdAt, ...(editedAt !== undefined && { editedAt }) })),
     labels: card.labels ?? [],
-    // The server keeps a smaller set of change types (archive and checklist events are not stored there).
+    // Only change types the server knows are sent (the filter follows the contract's activityTypes).
     activity: (card.activity ?? []).filter(isServerActivity).map(({ type, at, from, to }) => ({
       type,
       at,
