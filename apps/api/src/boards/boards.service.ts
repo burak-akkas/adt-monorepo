@@ -8,6 +8,7 @@ import {
 } from "@adt/contracts";
 import { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
+import { toCard } from "../cards/card.mapper.js";
 
 const boardWithContent = {
   lists: { orderBy: { position: "asc" }, include: { cards: { orderBy: { position: "asc" } } } },
@@ -28,17 +29,7 @@ function toDetail(board: BoardWithContent): BoardDetail {
       boardId: list.boardId,
       name: list.name,
       position: list.position,
-      cards: list.cards.map((card) => ({
-        id: card.id,
-        listId: card.listId,
-        title: card.title,
-        priority: card.priority,
-        cover: card.cover,
-        dueDate: card.dueDate ? card.dueDate.toISOString().slice(0, 10) : null,
-        notes: card.notes,
-        position: card.position,
-        createdAt: card.createdAt.toISOString(),
-      })),
+      cards: list.cards.map(toCard),
     })),
   };
 }
