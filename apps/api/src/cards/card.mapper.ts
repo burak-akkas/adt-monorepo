@@ -1,4 +1,4 @@
-import { MAX_ACTIVITY_ENTRIES, activityTypes, type CardResponse } from "@adt/contracts";
+import { MAX_ACTIVITY_ENTRIES, activityTypes, type ArchivedCard, type CardResponse } from "@adt/contracts";
 import type { Prisma } from "../generated/prisma/client.js";
 
 /** What every read of a card loads, so the response can carry its details without extra queries. */
@@ -13,16 +13,15 @@ export type CardWithDetails = Prisma.CardGetPayload<{ include: typeof cardDetail
 
 const knownActivityTypes: readonly string[] = activityTypes;
 
-export function toCard(card: CardWithDetails): CardResponse {
+/** The parts of a card shared by live and archived cards. */
+function toCardContent(card: CardWithDetails) {
   return {
     id: card.id,
-    listId: card.listId,
     title: card.title,
     priority: card.priority,
     cover: card.cover,
     dueDate: card.dueDate ? card.dueDate.toISOString().slice(0, 10) : null,
     notes: card.notes,
-    position: card.position,
     createdAt: card.createdAt.toISOString(),
     checklist: card.checklist.map((item) => ({ id: item.id, text: item.text, done: item.done, position: item.position })),
     comments: card.comments.map((comment) => ({
@@ -42,4 +41,19 @@ export function toCard(card: CardWithDetails): CardResponse {
         ...(entry.to ? { to: entry.to } : {}),
       })),
   };
+}
+
+/** A live card. Archived cards (no list) never reach here: they are mapped with `toArchivedCard`. */
+export function toCard(card: CardWithDetails): CardResponse {
+  if (card.listId === null) {
+    throw new Error(`Card ${card.id} has no list`);
+  }
+  return { ...toCardContent(card), listId: card.listId, position: card.position };
+}
+
+export function toArchivedCard(card: CardWithDetails): ArchivedCard {
+  if (card.boardId === null || card.archivedAt === null) {
+    throw new Error(`Card ${card.id} is not archived`);
+  }
+  return { ...toCardContent(card), boardId: card.boardId, archivedAt: card.archivedAt.toISOString() };
 }

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { archivedCardSchema } from "./archive.js";
 import { listWithCardsSchema } from "./lists.js";
 import { boardSettingsSchema } from "./settings.js";
 import { templateResponseSchema } from "./templates.js";
@@ -25,6 +26,8 @@ export const boardDetailSchema = boardSummarySchema.extend({
   // Last names of deleted lists, by list id.
   formerLists: z.record(z.string(), z.string()),
   templates: z.array(templateResponseSchema),
+  // Archived cards, oldest first.
+  archive: z.array(archivedCardSchema),
 });
 
 export type CreateBoardRequest = z.infer<typeof createBoardRequestSchema>;

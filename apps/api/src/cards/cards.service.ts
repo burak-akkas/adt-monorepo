@@ -15,10 +15,11 @@ export class CardsService {
   /** Loads a card only through its board's owner, so another user's card is simply not found. */
   private async findOwnedCard(tx: Prisma.TransactionClient, id: string, userId: string) {
     const card = await tx.card.findFirst({ where: { id, list: { board: { userId } } }, include: { ...cardDetails, list: true } });
-    if (!card) {
+    // The owner filter goes through the list, so an archived card (no list) is not found here.
+    if (!card || !card.list || card.listId === null) {
       throw new NotFoundException("Card not found");
     }
-    return card;
+    return { ...card, listId: card.listId, list: card.list };
   }
 
   /** Loads a list only through its board's owner. */
@@ -31,7 +32,7 @@ export class CardsService {
   }
 
   /** Writes positions 0..n-1 (and the list) for the given cards, touching only rows that changed. */
-  private async renumber(tx: Prisma.TransactionClient, listId: string, ordered: { id: string; listId: string; position: number }[]) {
+  private async renumber(tx: Prisma.TransactionClient, listId: string, ordered: { id: string; listId: string | null; position: number }[]) {
     for (const [position, card] of ordered.entries()) {
       if (card.position !== position || card.listId !== listId) {
         await tx.card.update({ where: { id: card.id }, data: { listId, position } });
