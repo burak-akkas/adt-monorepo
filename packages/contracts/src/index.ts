@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+export * from "./boards.js";
+export * from "./cards.js";
+export * from "./lists.js";
+
 // The API's request and response shapes. Both apps import them from here, so they can't drift apart.
 export const healthResponseSchema = z.object({
   status: z.enum(["ok", "error"]),
