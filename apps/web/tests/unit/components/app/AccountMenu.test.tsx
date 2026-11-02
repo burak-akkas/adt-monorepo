@@ -29,6 +29,7 @@ describe("AccountMenu", () => {
     useAuth.mockReturnValue({ status: "authenticated", user: { id: "1", email: "a@example.test" }, logout });
     render(<AccountMenu />);
     expect(screen.getByText("a@example.test")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Account" })).toHaveAttribute("href", "/account");
     expect(screen.queryByRole("link", { name: "Log in" })).not.toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole("button", { name: "Log out" }));
     expect(logout).toHaveBeenCalled();

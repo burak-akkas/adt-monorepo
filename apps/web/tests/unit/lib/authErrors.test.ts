@@ -4,9 +4,15 @@ import {
   GENERIC_ERROR,
   INVALID_EMAIL_ERROR,
   INVALID_LOGIN_ERROR,
+  REQUIRED_PASSWORD_ERROR,
+  SESSION_EXPIRED_ERROR,
   WEAK_PASSWORD_ERROR,
+  WRONG_PASSWORD_ERROR,
+  accountErrorMessage,
   authErrorMessage,
   validateAuthForm,
+  validateChangePasswordForm,
+  validateDeleteAccountForm,
 } from "@/lib/authErrors";
 
 describe("validateAuthForm", () => {
@@ -25,6 +31,33 @@ describe("validateAuthForm", () => {
 
   it("uses the single credentials message for an invalid login form", () => {
     expect(validateAuthForm("login", { email: "", password: "" })).toBe(INVALID_LOGIN_ERROR);
+  });
+});
+
+describe("account forms", () => {
+  it("validates the change-password form", () => {
+    expect(validateChangePasswordForm({ currentPassword: "old", newPassword: "a-new-password-1" })).toBeNull();
+    expect(validateChangePasswordForm({ currentPassword: "", newPassword: "a-new-password-1" })).toBe(
+      REQUIRED_PASSWORD_ERROR,
+    );
+    expect(validateChangePasswordForm({ currentPassword: "old", newPassword: "short" })).toBe(WEAK_PASSWORD_ERROR);
+    expect(validateChangePasswordForm({ currentPassword: "old", newPassword: "x".repeat(129) })).toBe(
+      WEAK_PASSWORD_ERROR,
+    );
+  });
+
+  it("requires a password to delete the account", () => {
+    expect(validateDeleteAccountForm({ password: "" })).toBe(REQUIRED_PASSWORD_ERROR);
+    expect(validateDeleteAccountForm({ password: "secret" })).toBeNull();
+  });
+
+  it("maps account API error codes", () => {
+    expect(accountErrorMessage({ status: 400, code: "INVALID_PASSWORD" })).toBe(WRONG_PASSWORD_ERROR);
+    expect(accountErrorMessage({ status: 400, code: "PASSWORD_TOO_SHORT" })).toBe(WEAK_PASSWORD_ERROR);
+    expect(accountErrorMessage({ status: 400, code: "PASSWORD_TOO_LONG" })).toBe(WEAK_PASSWORD_ERROR);
+    expect(accountErrorMessage({ status: 400, code: "SESSION_EXPIRED" })).toBe(SESSION_EXPIRED_ERROR);
+    expect(accountErrorMessage({ status: 500 })).toBe(GENERIC_ERROR);
+    expect(accountErrorMessage(null)).toBe(GENERIC_ERROR);
   });
 });
 
