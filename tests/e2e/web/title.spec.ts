@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { moveCardTo } from "../support/cardActions";
+import { moveCardTo } from "../../support/cardActions";
 
 async function addCard(page: import("@playwright/test").Page, title: string) {
   await page.getByLabel("New card title").fill(title);

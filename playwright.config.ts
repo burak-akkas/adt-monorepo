@@ -13,10 +13,14 @@ export default defineConfig({
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL: remoteURL ?? "http://localhost:3000/",
-    channel: "chrome",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
+  projects: [
+    // HTTP-only specs: they use the request fixture, so no browser is launched.
+    { name: "api", testMatch: "api/**/*.spec.ts" },
+    { name: "web", testMatch: "web/**/*.spec.ts", use: { channel: "chrome" } },
+  ],
   webServer: remoteURL
     ? undefined
     : {
