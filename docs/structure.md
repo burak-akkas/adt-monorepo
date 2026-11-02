@@ -22,7 +22,8 @@ Where things live and where new code and tests go.
 | Folder | Contents |
 |---|---|
 | `apps/web/tests/unit/` | Vitest tests. The tree mirrors `apps/web/src/`. |
-| `tests/e2e/` | Playwright specs, one file per user-visible flow (`<feature>.spec.ts`). |
+| `tests/e2e/web/` | Playwright browser specs (project `web`), one file per user-visible flow (`<feature>.spec.ts`). |
+| `tests/e2e/api/` | Playwright HTTP-only specs (project `api`): they use the `request` fixture and launch no browser. |
 | `tests/support/` | Helpers: `serve.mjs` (serves `out/`), `testStorage.ts`, `vitest.setup.ts`. |
 
 ## Where new code goes
@@ -35,5 +36,5 @@ Where things live and where new code and tests go.
 ## Where new tests go
 
 - **Unit/component test:** `apps/web/tests/unit/<same path as the source file>`, named after the module, e.g. `apps/web/src/lib/board/cards.ts` is tested in `apps/web/tests/unit/lib/board/cards.test.ts`. Extra files for one module use a suffix (`cards.duplicate.test.ts`). Import code with the `@/` alias.
-- **End-to-end test:** `tests/e2e/<feature>.spec.ts`. Navigate with `page.goto("./")` and select elements by role or label.
+- **End-to-end test:** `tests/e2e/web/<feature>.spec.ts` for UI flows, `tests/e2e/api/<feature>.spec.ts` for HTTP-only checks. Run one project with `npx playwright test --project=web` or `--project=api`. Navigate with `page.goto("./")` and select elements by role or label.
 - **Shared test helper:** `tests/support/`.

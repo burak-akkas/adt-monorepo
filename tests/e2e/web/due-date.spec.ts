@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { editCard, moveCardTo } from "../support/cardActions";
+import { editCard, moveCardTo } from "../../support/cardActions";
 
 const column = (page: Page, name: string) => page.getByRole("region", { name: new RegExp(`^${name}`) });
 

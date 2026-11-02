@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { deleteCardViaDialog } from "../support/cardActions";
+import { deleteCardViaDialog } from "../../support/cardActions";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("./");

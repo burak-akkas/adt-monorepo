@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { deleteCardViaDialog, moveCardTo } from "../support/cardActions";
+import { deleteCardViaDialog, moveCardTo } from "../../support/cardActions";
 
 // Every test gets a fresh browser context, so localStorage starts empty.
 // page.goto("./") resolves against baseURL, which also works for PR previews under /<repo>/pr-N/.

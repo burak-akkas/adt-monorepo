@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { editCard } from "../support/cardActions";
+import { editCard } from "../../support/cardActions";
 
 test("a renamed Done list keeps its marker, no overdue chip and Archive done", async ({ page }) => {
   await page.goto("./");
