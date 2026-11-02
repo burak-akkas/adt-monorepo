@@ -36,6 +36,19 @@ jobs:
       - name: Install PyYAML
         run: python3 -c "import yaml" 2>/dev/null || pip install pyyaml
 
+      # The tooling in Python (scripts/agents/agentflow): checks and unit tests first, they take seconds.
+      - name: Agent tooling checks (ruff, mypy, unit tests)
+        working-directory: scripts/agents
+        run: |
+          pip install --quiet ruff==0.16.9 mypy==2.3.1
+          ruff check .
+          ruff format --check .
+          mypy agentflow tests
+          python3 -m unittest discover -s tests -t . -v
+
+      - name: Parity with the bash scripts
+        run: python3 scripts/sim/test_parity.py
+
       - name: Scenario tests
         run: python3 scripts/sim/test_scenarios.py
 

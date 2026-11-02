@@ -12,6 +12,7 @@ python3 scripts/sim/test_scenarios.py          # deterministic scenarios, ~1 min
 python3 scripts/sim/matrix.py --quick --seeds 3  # randomized fast set, ~5 minutes
 python3 scripts/sim/matrix.py                    # every profile, 6 seeds each, ~30 minutes
 python3 scripts/sim/issueflow.py --seeds 10       # the issue pipeline, randomized, ~10 minutes
+python3 scripts/sim/test_parity.py                # migrated scripts behave like their bash versions
 ```
 
 `agent-sim.yml` runs the first two on every PR that changes the agent tooling.
@@ -28,6 +29,7 @@ python3 scripts/sim/issueflow.py --seeds 10       # the issue pipeline, randomiz
 | [`profiles.json`](profiles.json) | Scenario profiles: number of parallel PRs and the parameters that differ from `team.py`'s `DEFAULTS` |
 | [`matrix.py`](matrix.py) | Runs profiles × seeds in parallel and prints the matrix. Exits 1 on any problem |
 | [`issueflow.py`](issueflow.py) | The issue pipeline before the PR: Architect (split mode, size check, splitting), Lead (budget, `split`), Implementor (continuations, waiting for other issues) and the Sub-issues workflow, through their real steps. `Flow` drives it step by step for `test_scenarios.py`; run as a script, it plays many issues with randomized agents (too-big designs, Architects that don't split, failed or partial runs, dependencies, humans sending escalations back) and fails when an issue ends anywhere but closed or with a human, or the Lead loops. `--params` overrides its `DEFAULTS` |
+| [`test_parity.py`](test_parity.py) | The bash-to-Python migration: runs each migrated script as it was in bash (`scripts/agents` at `PARITY_REF`) and as it is now on the same fake repository, and compares labels, comments, issue states, events and output. Changes made on purpose are listed per case (`differs`), with the reason |
 | [`fakegh/git`](fakegh/git) | `git ls-remote` answers from the fake repository's `branches`, so a simulated push is seen; anything else is the real git |
 
 ## What counts as a problem

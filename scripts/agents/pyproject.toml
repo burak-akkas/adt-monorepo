@@ -1,0 +1,18 @@
+# Settings for the agent tooling's own checks (no package: the workflows run it from the checkout).
+[tool.ruff]
+line-length = 160
+target-version = "py310"
+src = ["."]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PL", "PT", "C4"]
+ignore = ["PLR2004", "PLR0913", "RUF001", "PT009", "PT027", "E702"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["PLR0915"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+mypy_path = "."
+explicit_package_bases = true

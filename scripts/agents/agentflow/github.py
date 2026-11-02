@@ -1,0 +1,186 @@
+"""GitHub access for the agent tooling.
+
+`GitHub` is the interface the commands use; `GhCli` implements it with the `gh` CLI, so the
+workflows' token and the simulator's fake `gh` (scripts/sim/fakegh) both work unchanged.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import tempfile
+import urllib.parse
+from abc import ABC, abstractmethod
+from collections.abc import Callable
+from typing import Any
+
+from agentflow.model import Comment, Issue, LabelEvent
+
+Runner = Callable[[list[str], "str | None"], str]
+
+
+class GhError(Exception):
+    """A `gh` call failed (API error, network, missing item)."""
+
+
+class GitHub(ABC):
+    @abstractmethod
+    def issue(self, number: int) -> Issue: ...
+
+    @abstractmethod
+    def labels(self, number: int) -> list[str]: ...
+
+    @abstractmethod
+    def add_label(self, number: int, label: str) -> None: ...
+
+    @abstractmethod
+    def remove_label(self, number: int, label: str) -> None: ...
+
+    @abstractmethod
+    def comments(self, number: int) -> list[Comment]: ...
+
+    @abstractmethod
+    def comment(self, number: int, body: str) -> None: ...
+
+    @abstractmethod
+    def edit_comment(self, comment_id: int, body: str) -> None: ...
+
+    @abstractmethod
+    def label_events(self, number: int) -> list[LabelEvent]:
+        """When labels were applied (`labeled` events only), oldest first."""
+
+    @abstractmethod
+    def assign(self, number: int, login: str) -> None: ...
+
+    @abstractmethod
+    def open_issues(self, label: str) -> list[int]:
+        """Open issues (not PRs) carrying a label."""
+
+    @abstractmethod
+    def create_issue(self, title: str, body: str) -> int: ...
+
+    @abstractmethod
+    def close_issue(self, number: int, reason: str) -> None:
+        """reason: "completed" or "not planned", as `gh issue close --reason` takes it."""
+
+    @abstractmethod
+    def link_sub_issue(self, parent: int, child_id: int) -> None: ...
+
+    @abstractmethod
+    def create_label(self, name: str, color: str, description: str) -> None: ...
+
+    @abstractmethod
+    def pr_closing_issue(self, pr: int) -> int | None:
+        """The issue a PR closes (its first closing reference), if any."""
+
+
+def run_gh(args: list[str], stdin: str | None = None) -> str:
+    try:
+        p = subprocess.run(["gh", *args], input=stdin, capture_output=True, text=True, check=False)
+    except OSError as e:
+        raise GhError(f"cannot run gh: {e}") from e
+    if p.returncode != 0:
+        raise GhError(p.stderr.strip() or f"gh {' '.join(args[:3])} exited with {p.returncode}")
+    return p.stdout
+
+
+def _issue(data: dict[str, Any]) -> Issue:
+    return Issue(
+        number=int(data["number"]),
+        id=int(data.get("id") or 0),
+        title=data.get("title") or "",
+        body=data.get("body") or "",
+        state=data.get("state") or "open",
+        state_reason=data.get("state_reason"),
+        author_id=int((data.get("user") or {}).get("id") or 0),
+        labels=tuple(label["name"] for label in data.get("labels") or []),
+        is_pr=bool(data.get("pull_request")),
+    )
+
+
+class GhCli(GitHub):
+    def __init__(self, repo: str, runner: Runner = run_gh) -> None:
+        self.repo = repo
+        self._run = runner
+
+    # --- plumbing ------------------------------------------------------------------------------
+    def _path(self, *parts: object) -> str:
+        return "/".join(["repos", self.repo, *map(str, parts)])
+
+    def _json(self, args: list[str]) -> Any:
+        out = self._run(args, None)
+        try:
+            return json.loads(out) if out.strip() else None
+        except json.JSONDecodeError as e:
+            raise GhError(f"gh {' '.join(args[:3])} returned no JSON: {out[:200]}") from e
+
+    def _pages(self, path: str) -> list[dict[str, Any]]:
+        pages = self._json(["api", "--paginate", "--slurp", path]) or []
+        return [item for page in pages for item in page]
+
+    # --- reads ---------------------------------------------------------------------------------
+    def issue(self, number: int) -> Issue:
+        return _issue(self._json(["api", self._path("issues", number)]))
+
+    def labels(self, number: int) -> list[str]:
+        return [label["name"] for label in self._json(["api", self._path("issues", number, "labels")]) or []]
+
+    def comments(self, number: int) -> list[Comment]:
+        return [
+            Comment(id=int(c["id"]), author_id=int((c.get("user") or {}).get("id") or 0), body=c.get("body") or "", created_at=c.get("created_at") or "")
+            for c in self._pages(self._path("issues", number, "comments"))
+        ]
+
+    def label_events(self, number: int) -> list[LabelEvent]:
+        return [
+            LabelEvent(label=e["label"]["name"], created_at=e.get("created_at") or "")
+            for e in self._pages(self._path("issues", number, "events"))
+            if e.get("event") == "labeled" and e.get("label")
+        ]
+
+    def open_issues(self, label: str) -> list[int]:
+        rows = self._json(["issue", "list", "-R", self.repo, "--state", "open", "--label", label, "--limit", "100", "--json", "number"])
+        return [int(r["number"]) for r in rows or []]
+
+    def pr_closing_issue(self, pr: int) -> int | None:
+        refs = (self._json(["pr", "view", str(pr), "-R", self.repo, "--json", "closingIssuesReferences"]) or {}).get("closingIssuesReferences") or []
+        return int(refs[0]["number"]) if refs else None
+
+    # --- writes --------------------------------------------------------------------------------
+    def add_label(self, number: int, label: str) -> None:
+        self._run(["api", "-X", "POST", self._path("issues", number, "labels"), "-f", "labels[]=" + label], None)
+
+    def remove_label(self, number: int, label: str) -> None:
+        self._run(["api", "-X", "DELETE", self._path("issues", number, "labels", urllib.parse.quote(label, safe=""))], None)
+
+    def comment(self, number: int, body: str) -> None:
+        self._run(["api", self._path("issues", number, "comments"), "-f", "body=" + body], None)
+
+    def edit_comment(self, comment_id: int, body: str) -> None:
+        self._run(["api", "-X", "PATCH", self._path("issues", "comments", comment_id), "-f", "body=" + body], None)
+
+    def assign(self, number: int, login: str) -> None:
+        self._run(["api", "-X", "POST", self._path("issues", number, "assignees"), "-f", "assignees[]=" + login], None)
+
+    def create_issue(self, title: str, body: str) -> int:
+        fd, path = tempfile.mkstemp(prefix="agentflow-", suffix=".md")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(body)
+            url = self._run(["issue", "create", "-R", self.repo, "--title", title, "--body-file", path], None).strip()
+        finally:
+            os.unlink(path)
+        try:
+            return int(url.rstrip("/").rsplit("/", 1)[-1])
+        except ValueError:
+            raise GhError(f"gh issue create printed no issue URL: {url!r}") from None
+
+    def close_issue(self, number: int, reason: str) -> None:
+        self._run(["issue", "close", str(number), "-R", self.repo, "--reason", reason], None)
+
+    def link_sub_issue(self, parent: int, child_id: int) -> None:
+        self._run(["api", "-X", "POST", self._path("issues", parent, "sub_issues"), "-F", f"sub_issue_id={child_id}"], None)
+
+    def create_label(self, name: str, color: str, description: str) -> None:
+        self._run(["label", "create", name, "-R", self.repo, "--color", color, "--description", description, "--force"], None)

@@ -1,7 +1,4 @@
-#!/usr/bin/env bash
-# Prints the commit a branch points to on origin, or nothing if the branch doesn't exist there.
+#!/bin/sh
 # Usage: branch-head.sh <branch>
-set -uo pipefail
-
-git ls-remote --heads origin "refs/heads/$1" 2>/dev/null | cut -f1 | head -1
-exit 0
+# Implemented in Python: scripts/agents/agentflow (`branch-head` command). This wrapper keeps the script's name for the workflows.
+exec python3 -I "$(dirname "$0")/agentflow" branch-head "$@"
