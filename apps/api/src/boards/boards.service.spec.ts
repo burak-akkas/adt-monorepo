@@ -104,6 +104,42 @@ describe("BoardsService", () => {
     expect(detail.lists[0].id).not.toBe(list1.id);
   });
 
+  it("returns empty detail arrays for a plain card, and copies checklist, comments and labels (not activity) on duplicate", async () => {
+    const source = await service.create(alice, "Details source");
+    const list = await prisma.boardList.create({ data: { boardId: source.id, name: "L", position: 0 } });
+    const plain = await prisma.card.create({ data: { listId: list.id, title: "plain", position: 1 } });
+    const card = await prisma.card.create({ data: { listId: list.id, title: "rich", position: 0 } });
+    const commentAt = new Date("2026-01-02T03:04:05.000Z");
+    const editedAt = new Date("2026-01-03T03:04:05.000Z");
+    await prisma.checklistItem.createMany({
+      data: [
+        { cardId: card.id, text: "second", done: false, position: 1 },
+        { cardId: card.id, text: "first", done: true, position: 0 },
+      ],
+    });
+    await prisma.cardComment.create({ data: { cardId: card.id, text: "hello", createdAt: commentAt, editedAt } });
+    await prisma.cardLabel.createMany({
+      data: [
+        { cardId: card.id, name: "Urgent", position: 0 },
+        { cardId: card.id, name: "bug", position: 1 },
+      ],
+    });
+    await prisma.cardActivity.create({ data: { cardId: card.id, type: "created" } });
+
+    const original = await service.get(source.id, alice);
+    expect(original.lists[0].cards[1]).toMatchObject({ id: plain.id, checklist: [], comments: [], labels: [], activity: [] });
+    expect(original.lists[0].cards[0].activity).toHaveLength(1);
+
+    const copy = await service.get((await service.duplicate(source.id, alice)).id, alice);
+    const copied = copy.lists[0].cards[0];
+    expect(copied.id).not.toBe(card.id);
+    expect(copied.checklist.map((i) => [i.text, i.done, i.position])).toEqual([["first", true, 0], ["second", false, 1]]);
+    expect(copied.checklist[0].id).not.toBe(original.lists[0].cards[0].checklist[0].id);
+    expect(copied.comments).toMatchObject([{ text: "hello", createdAt: commentAt.toISOString(), editedAt: editedAt.toISOString() }]);
+    expect(copied.labels).toEqual(["Urgent", "bug"]);
+    expect(copied.activity).toEqual([]);
+  });
+
   it("refuses to delete the last board and cascades the rest", async () => {
     const only = await service.create(bob, "Bob extra");
     const bobBoards = await service.list(bob);

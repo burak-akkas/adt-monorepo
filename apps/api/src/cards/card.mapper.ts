@@ -1,9 +1,19 @@
-import type { CardResponse } from "@adt/contracts";
+import { MAX_ACTIVITY_ENTRIES, activityTypes, type CardResponse } from "@adt/contracts";
 import type { Prisma } from "../generated/prisma/client.js";
 
-export type CardRow = Prisma.CardGetPayload<object>;
+/** What every read of a card loads, so the response can carry its details without extra queries. */
+export const cardDetails = {
+  checklist: { orderBy: { position: "asc" } },
+  comments: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] },
+  labels: { orderBy: { position: "asc" } },
+  activity: { orderBy: [{ at: "desc" }, { id: "desc" }], take: MAX_ACTIVITY_ENTRIES },
+} satisfies Prisma.CardInclude;
 
-export function toCard(card: CardRow): CardResponse {
+export type CardWithDetails = Prisma.CardGetPayload<{ include: typeof cardDetails }>;
+
+const knownActivityTypes: readonly string[] = activityTypes;
+
+export function toCard(card: CardWithDetails): CardResponse {
   return {
     id: card.id,
     listId: card.listId,
@@ -14,5 +24,22 @@ export function toCard(card: CardRow): CardResponse {
     notes: card.notes,
     position: card.position,
     createdAt: card.createdAt.toISOString(),
+    checklist: card.checklist.map((item) => ({ id: item.id, text: item.text, done: item.done, position: item.position })),
+    comments: card.comments.map((comment) => ({
+      id: comment.id,
+      text: comment.text,
+      createdAt: comment.createdAt.toISOString(),
+      editedAt: comment.editedAt ? comment.editedAt.toISOString() : null,
+    })),
+    labels: card.labels.map((label) => label.name),
+    activity: card.activity
+      .filter((entry): entry is typeof entry & { type: CardResponse["activity"][number]["type"] } => knownActivityTypes.includes(entry.type))
+      .map((entry) => ({
+        id: entry.id,
+        at: entry.at.toISOString(),
+        type: entry.type,
+        ...(entry.from ? { from: entry.from } : {}),
+        ...(entry.to ? { to: entry.to } : {}),
+      })),
   };
 }

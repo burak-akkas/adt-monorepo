@@ -168,7 +168,65 @@ model Card {
   position  Int
   createdAt DateTime    @default(now())
   updatedAt DateTime    @default(now()) @updatedAt
+  checklist ChecklistItem[]
+  comments  CardComment[]
+  labels    CardLabel[]
+  activity  CardActivity[]
 
   @@index([listId, position])
   @@map("card")
+}
+
+// Card details. All cascade when the card is deleted.
+model ChecklistItem {
+  id        String   @id @default(uuid())
+  cardId    String
+  card      Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  text      String
+  done      Boolean  @default(false)
+  position  Int
+  createdAt DateTime @default(now())
+
+  @@index([cardId, position])
+  @@map("checklist_item")
+}
+
+model CardComment {
+  id        String    @id @default(uuid())
+  cardId    String
+  card      Card      @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  text      String
+  createdAt DateTime  @default(now())
+  editedAt  DateTime?
+
+  @@index([cardId, createdAt])
+  @@map("card_comment")
+}
+
+// Case-insensitive unique label per card is a raw-SQL index in the add_card_details migration
+// (`card_label_cardId_lower_name_key`); Prisma can't express it.
+model CardLabel {
+  id        String   @id @default(uuid())
+  cardId    String
+  card      Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  name      String
+  position  Int
+  createdAt DateTime @default(now())
+
+  @@index([cardId, position])
+  @@map("card_label")
+}
+
+// `type` is validated by the contract enum. `from`/`to` are list ids for `moved`, old/new values otherwise.
+model CardActivity {
+  id     String   @id @default(uuid())
+  cardId String
+  card   Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  type   String
+  at     DateTime @default(now())
+  from   String?
+  to     String?
+
+  @@index([cardId, at])
+  @@map("card_activity")
 }

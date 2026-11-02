@@ -11,10 +11,10 @@ import {
 } from "@adt/contracts";
 import { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
-import { toCard } from "../cards/card.mapper.js";
+import { cardDetails, toCard } from "../cards/card.mapper.js";
 
 const boardWithContent = {
-  lists: { orderBy: { position: "asc" }, include: { cards: { orderBy: { position: "asc" } } } },
+  lists: { orderBy: { position: "asc" }, include: { cards: { orderBy: { position: "asc" }, include: cardDetails } } },
   formerLists: true,
 } satisfies Prisma.BoardInclude;
 
@@ -217,6 +217,17 @@ export class BoardsService {
                       notes: card.notes,
                       position: card.position,
                       createdAt: card.createdAt,
+                      checklist: {
+                        create: card.checklist.map((item) => ({ text: item.text, done: item.done, position: item.position })),
+                      },
+                      comments: {
+                        create: card.comments.map((comment) => ({
+                          text: comment.text,
+                          createdAt: comment.createdAt,
+                          editedAt: comment.editedAt,
+                        })),
+                      },
+                      labels: { create: card.labels.map((label) => ({ name: label.name, position: label.position })) },
                     })),
                   },
                 })),
