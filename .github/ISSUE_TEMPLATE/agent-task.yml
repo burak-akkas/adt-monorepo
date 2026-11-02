@@ -1,0 +1,30 @@
+name: Agent task
+description: A bug or small feature for the agent team to analyze, design, implement and review.
+labels: ["agent:start"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are we solving?
+      description: Who is affected, what happens today, and why it matters.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What should be true when this is done? Examples, screenshots and expected behaviour help a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints / out of scope
+      description: Anything the agents must not change, deadlines, related issues.
+  - type: dropdown
+    id: type
+    attributes:
+      label: Type
+      options: [bug, feature, refactor, docs, chore]
+    validations:
+      required: true
