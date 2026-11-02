@@ -140,6 +140,43 @@ describe("BoardsService", () => {
     expect(copied.activity).toEqual([]);
   });
 
+  it("returns the templates in the board detail, and copies them (not shared) on duplicate", async () => {
+    const source = await service.create(alice, "Templates source");
+    await prisma.cardTemplate.create({
+      data: { boardId: source.id, name: "Second", title: "b", createdAt: new Date("2026-01-02T00:00:00.000Z") },
+    });
+    await prisma.cardTemplate.create({
+      data: {
+        boardId: source.id,
+        name: "First",
+        title: "a",
+        priority: "high",
+        notes: "n",
+        labels: ["x", "y"],
+        cover: "blue",
+        checklist: ["one", "two"],
+        createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      },
+    });
+
+    const original = await service.get(source.id, alice);
+    expect(original.templates.map((t) => t.name)).toEqual(["First", "Second"]);
+
+    const copy = await service.get((await service.duplicate(source.id, alice)).id, alice);
+    expect(copy.templates.map((t) => t.name)).toEqual(["First", "Second"]);
+    expect(copy.templates[0]).toMatchObject({
+      boardId: copy.id,
+      title: "a",
+      priority: "high",
+      notes: "n",
+      labels: ["x", "y"],
+      cover: "blue",
+      checklist: ["one", "two"],
+    });
+    expect(copy.templates[0].id).not.toBe(original.templates[0].id);
+    expect((await service.get(source.id, alice)).templates).toHaveLength(2);
+  });
+
   it("refuses to delete the last board and cascades the rest", async () => {
     const only = await service.create(bob, "Bob extra");
     const bobBoards = await service.list(bob);
