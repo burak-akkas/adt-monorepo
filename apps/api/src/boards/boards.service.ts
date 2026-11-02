@@ -11,7 +11,8 @@ import {
 } from "@adt/contracts";
 import { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
-import { cardDetails, toCard } from "../cards/card.mapper.js";
+import { archiveOrder } from "../archive/archive.service.js";
+import { cardDetails, toArchivedCard, toCard, type CardWithDetails } from "../cards/card.mapper.js";
 import { templateOrder, toTemplate } from "../templates/templates.service.js";
 
 const boardWithContent = {
@@ -22,6 +23,7 @@ const boardWithContent = {
 
 type BoardRow = Prisma.BoardGetPayload<object>;
 type BoardWithContent = Prisma.BoardGetPayload<{ include: typeof boardWithContent }>;
+type ArchivedCardRow = CardWithDetails;
 
 function toSummary(board: BoardRow): BoardSummary {
   return { id: board.id, name: board.name, createdAt: board.createdAt.toISOString(), updatedAt: board.updatedAt.toISOString() };
@@ -43,7 +45,7 @@ function toSettings(board: BoardRow, lists: { id: string; collapsed: boolean }[]
   };
 }
 
-function toDetail(board: BoardWithContent): BoardDetail {
+function toDetail(board: BoardWithContent, archive: ArchivedCardRow[]): BoardDetail {
   return {
     ...toSummary(board),
     lists: board.lists.map((list) => ({
@@ -58,6 +60,7 @@ function toDetail(board: BoardWithContent): BoardDetail {
     settings: toSettings(board, board.lists),
     formerLists: Object.fromEntries(board.formerLists.map((former) => [former.listId, former.name])),
     templates: board.templates.map(toTemplate),
+    archive: archive.map(toArchivedCard),
   };
 }
 
@@ -137,7 +140,12 @@ export class BoardsService {
     if (!board) {
       throw new NotFoundException("Board not found");
     }
-    return toDetail(board);
+    const archive = await this.prisma.card.findMany({
+      where: { boardId: id, archivedAt: { not: null } },
+      orderBy: archiveOrder,
+      include: cardDetails,
+    });
+    return toDetail(board, archive);
   }
 
   async rename(id: string, userId: string, name: string): Promise<BoardSummary> {

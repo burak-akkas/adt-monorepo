@@ -1,5 +1,5 @@
 import { MAX_ACTIVITY_ENTRIES } from "@adt/contracts";
-import { cardDetails, toCard, type CardWithDetails } from "./card.mapper.js";
+import { cardDetails, toArchivedCard, toCard, type CardWithDetails } from "./card.mapper.js";
 
 const base: CardWithDetails = {
   id: "c1",
@@ -10,6 +10,8 @@ const base: CardWithDetails = {
   dueDate: null,
   notes: null,
   position: 0,
+  boardId: null,
+  archivedAt: null,
   createdAt: new Date("2026-01-01T00:00:00.000Z"),
   updatedAt: new Date("2026-01-01T00:00:00.000Z"),
   checklist: [],
@@ -80,6 +82,22 @@ describe("toCard", () => {
       { id: "a2", at: at.toISOString(), type: "created" },
     ]);
     expect(card.activity[1]).not.toHaveProperty("from");
+  });
+});
+
+describe("toArchivedCard", () => {
+  const archivedAt = new Date("2026-04-01T00:00:00.000Z");
+
+  it("maps an archived card without list or position", () => {
+    const card = toArchivedCard({ ...base, listId: null, boardId: "b1", archivedAt });
+    expect(card).toMatchObject({ id: "c1", boardId: "b1", archivedAt: archivedAt.toISOString(), title: "Title" });
+    expect(card).not.toHaveProperty("listId");
+    expect(card).not.toHaveProperty("position");
+  });
+
+  it("refuses a live card, and toCard refuses an archived one", () => {
+    expect(() => toArchivedCard(base)).toThrow();
+    expect(() => toCard({ ...base, listId: null, boardId: "b1", archivedAt })).toThrow();
   });
 });
 

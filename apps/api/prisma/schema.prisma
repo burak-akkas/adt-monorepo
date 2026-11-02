@@ -115,6 +115,7 @@ model Board {
   doneList           BoardList?        @relation("BoardDoneList", fields: [doneListId], references: [id], onDelete: SetNull)
   formerLists        BoardFormerList[]
   templates          CardTemplate[]
+  archivedCards      Card[]
 
   @@index([userId])
   @@map("board")
@@ -178,8 +179,12 @@ model CardTemplate {
 
 model Card {
   id        String      @id @default(uuid())
-  listId    String
-  list      BoardList   @relation(fields: [listId], references: [id], onDelete: Cascade)
+  // Live cards have a list. An archived card has listId null, boardId set, archivedAt set and position 0.
+  listId     String?
+  list       BoardList?  @relation(fields: [listId], references: [id], onDelete: Cascade)
+  boardId    String?
+  board      Board?      @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  archivedAt DateTime?
   title     String
   priority  Priority    @default(medium)
   cover     CoverColor?
@@ -194,6 +199,7 @@ model Card {
   activity  CardActivity[]
 
   @@index([listId, position])
+  @@index([boardId, archivedAt])
   @@map("card")
 }
 
