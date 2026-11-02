@@ -24,6 +24,8 @@ export function createAuth(prisma: PrismaClient, env: NodeJS.ProcessEnv = proces
     baseURL,
     secret,
     trustedOrigins: [new URL(baseURL).origin],
+    // With a password in the request, Better Auth skips the session-freshness check.
+    user: { deleteUser: { enabled: true } },
     emailAndPassword: {
       enabled: true,
       minPasswordLength: PASSWORD_MIN_LENGTH,

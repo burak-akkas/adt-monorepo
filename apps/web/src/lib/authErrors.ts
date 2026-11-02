@@ -1,4 +1,10 @@
-import { PASSWORD_MIN_LENGTH, loginFormSchema, registerFormSchema } from "@adt/contracts";
+import {
+  PASSWORD_MIN_LENGTH,
+  changePasswordFormSchema,
+  deleteAccountFormSchema,
+  loginFormSchema,
+  registerFormSchema,
+} from "@adt/contracts";
 
 export type AuthMode = "login" | "register";
 
@@ -18,6 +24,31 @@ export function validateAuthForm(mode: AuthMode, values: AuthFormValues): string
   if (mode === "login") return INVALID_LOGIN_ERROR;
   if (fields.has("email")) return INVALID_EMAIL_ERROR;
   return WEAK_PASSWORD_ERROR;
+}
+
+export const WRONG_PASSWORD_ERROR = "Current password is incorrect.";
+export const SESSION_EXPIRED_ERROR = "Log in again, then retry.";
+export const REQUIRED_PASSWORD_ERROR = "Enter your current password.";
+
+export function validateChangePasswordForm(values: { currentPassword: string; newPassword: string }): string | null {
+  const result = changePasswordFormSchema.safeParse(values);
+  if (result.success) return null;
+  const fields = new Set(result.error.issues.map((issue) => issue.path[0]));
+  return fields.has("currentPassword") ? REQUIRED_PASSWORD_ERROR : WEAK_PASSWORD_ERROR;
+}
+
+export function validateDeleteAccountForm(values: { password: string }): string | null {
+  return deleteAccountFormSchema.safeParse(values).success ? null : REQUIRED_PASSWORD_ERROR;
+}
+
+/** Error text for the account page's change-password and delete-account calls. */
+export function accountErrorMessage(error: AuthApiError): string {
+  if (!error) return GENERIC_ERROR;
+  const code = error.code ?? "";
+  if (code === "INVALID_PASSWORD") return WRONG_PASSWORD_ERROR;
+  if (code === "PASSWORD_TOO_SHORT" || code === "PASSWORD_TOO_LONG") return WEAK_PASSWORD_ERROR;
+  if (code === "SESSION_EXPIRED") return SESSION_EXPIRED_ERROR;
+  return GENERIC_ERROR;
 }
 
 export function authErrorMessage(mode: AuthMode, error: AuthApiError): string {

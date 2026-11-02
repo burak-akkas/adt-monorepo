@@ -97,6 +97,108 @@ describe("Better Auth at /auth", () => {
   it("still parses JSON for the other routes", async () => {
     await request(app.getHttpServer()).get("/health").expect(200);
   });
+
+  describe("account management", () => {
+    const signUp = async (name: string) => cookieOf(await post("/auth/sign-up/email", { name, email: email(name), password: PASSWORD }).expect(200));
+    const signIn = async (name: string, password = PASSWORD) =>
+      post("/auth/sign-in/email", { email: email(name), password });
+    const sessionOf = (cookie: string) => request(app.getHttpServer()).get("/auth/get-session").set("Cookie", cookie);
+
+    it("changes the password, revokes other sessions and keeps the current one", async () => {
+      const current = await signUp("chg");
+      const other = cookieOf(await signIn("chg"));
+      expect((await sessionOf(other).expect(200)).body).not.toBeNull();
+
+      const res = await post("/auth/change-password", { currentPassword: PASSWORD, newPassword: "another-good-password-2", revokeOtherSessions: true }, current);
+      expect(res.status).toBe(200);
+
+      expect((await sessionOf(other).expect(200)).body).toBeNull();
+      const stillIn = await sessionOf(cookieOf(res)).expect(200);
+      expect(stillIn.body?.user.email).toBe(email("chg"));
+
+      expect((await signIn("chg")).status).toBe(401);
+      expect((await signIn("chg", "another-good-password-2")).status).toBe(200);
+    });
+
+    it("rejects a wrong current password and a weak new password without changing anything", async () => {
+      const cookie = await signUp("badchg");
+      const wrong = await post("/auth/change-password", { currentPassword: "not-the-password-1", newPassword: "another-good-password-2" }, cookie);
+      expect(wrong.status).toBe(400);
+      expect(wrong.body.code).toBe("INVALID_PASSWORD");
+
+      const weak = await post("/auth/change-password", { currentPassword: PASSWORD, newPassword: "short" }, cookie);
+      expect(weak.status).toBe(400);
+      expect(weak.body.code).toBe("PASSWORD_TOO_SHORT");
+
+      expect((await signIn("badchg")).status).toBe(200);
+    });
+
+    it("rejects an anonymous password change", async () => {
+      const res = await post("/auth/change-password", { currentPassword: PASSWORD, newPassword: "another-good-password-2" });
+      expect(res.status).toBe(401);
+    });
+
+    it("refuses to delete with a wrong password", async () => {
+      const cookie = await signUp("keep");
+      const res = await post("/auth/delete-user", { password: "not-the-password-1" }, cookie);
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe("INVALID_PASSWORD");
+      expect(await prisma.user.count({ where: { email: email("keep") } })).toBe(1);
+      expect((await sessionOf(cookie).expect(200)).body).not.toBeNull();
+    });
+
+    it("deletes only the caller's user, sessions and accounts", async () => {
+      const victim = await signUp("del");
+      await signIn("del");
+      const bystander = await signUp("bystander");
+
+      const res = await post("/auth/delete-user", { password: PASSWORD }, victim);
+      expect(res.status).toBe(200);
+
+      expect(await prisma.user.count({ where: { email: email("del") } })).toBe(0);
+      expect(await prisma.session.count({ where: { user: { email: email("del") } } })).toBe(0);
+      expect(await prisma.account.count({ where: { user: { email: email("del") } } })).toBe(0);
+      expect((await sessionOf(victim).expect(200)).body).toBeNull();
+      expect((await signIn("del")).status).toBe(401);
+
+      expect(await prisma.user.count({ where: { email: email("bystander") } })).toBe(1);
+      expect(await prisma.session.count({ where: { user: { email: email("bystander") } } })).toBe(1);
+      expect(await prisma.account.count({ where: { user: { email: email("bystander") } } })).toBe(1);
+      expect((await sessionOf(bystander).expect(200)).body?.user.email).toBe(email("bystander"));
+      expect((await signIn("bystander")).status).toBe(200);
+    });
+
+    it("deletes the caller's boards, lists and cards too, and no one else's", async () => {
+      const victim = await signUp("owner");
+      const bystander = await signUp("owner2");
+      const ownerId = (await prisma.user.findFirstOrThrow({ where: { email: email("owner") } })).id;
+      const otherId = (await prisma.user.findFirstOrThrow({ where: { email: email("owner2") } })).id;
+      const seedBoard = async (userId: string, name: string) => {
+        const board = await prisma.board.create({ data: { userId, name } });
+        const list = await prisma.boardList.create({ data: { boardId: board.id, name: "To do", position: 0 } });
+        await prisma.card.create({ data: { listId: list.id, title: "card", position: 0 } });
+        return board.id;
+      };
+      const ownerBoard = await seedBoard(ownerId, "Owner board");
+      const otherBoard = await seedBoard(otherId, "Other board");
+
+      await post("/auth/delete-user", { password: PASSWORD }, victim).expect(200);
+
+      expect(await prisma.board.count({ where: { userId: ownerId } })).toBe(0);
+      expect(await prisma.boardList.count({ where: { boardId: ownerBoard } })).toBe(0);
+      expect(await prisma.card.count({ where: { list: { boardId: ownerBoard } } })).toBe(0);
+
+      expect(await prisma.board.count({ where: { id: otherBoard } })).toBe(1);
+      expect(await prisma.boardList.count({ where: { boardId: otherBoard } })).toBe(1);
+      expect(await prisma.card.count({ where: { list: { boardId: otherBoard } } })).toBe(1);
+      expect((await sessionOf(bystander).expect(200)).body?.user.email).toBe(email("owner2"));
+    });
+
+    it("rejects an anonymous delete", async () => {
+      const res = await post("/auth/delete-user", { password: PASSWORD });
+      expect(res.status).toBe(401);
+    });
+  });
 });
 
 describe("auth configuration", () => {
