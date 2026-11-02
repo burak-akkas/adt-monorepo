@@ -50,6 +50,11 @@ export class CardsController {
     return this.cards.move(id, userId, body.listId, body.position);
   }
 
+  @Post("cards/:id/duplicate")
+  duplicate(@UserId() userId: string, @Param("id") id: string): Promise<CardResponse> {
+    return this.cards.duplicate(id, userId);
+  }
+
   @Delete("cards/:id")
   @HttpCode(204)
   async remove(@UserId() userId: string, @Param("id") id: string): Promise<void> {
