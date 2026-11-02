@@ -2,7 +2,7 @@ import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import type { CardResponse, CreateCardRequest, UpdateCardRequest } from "@adt/contracts";
 import type { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
-import { toCard, type CardRow } from "./card.mapper.js";
+import { cardDetails, toCard } from "./card.mapper.js";
 
 /** `YYYY-MM-DD` (already validated by the contract) as UTC midnight, for a `@db.Date` column. */
 const toDate = (value: string) => new Date(`${value}T00:00:00.000Z`);
@@ -13,7 +13,7 @@ export class CardsService {
 
   /** Loads a card only through its board's owner, so another user's card is simply not found. */
   private async findOwnedCard(tx: Prisma.TransactionClient, id: string, userId: string) {
-    const card = await tx.card.findFirst({ where: { id, list: { board: { userId } } }, include: { list: true } });
+    const card = await tx.card.findFirst({ where: { id, list: { board: { userId } } }, include: { ...cardDetails, list: true } });
     if (!card) {
       throw new NotFoundException("Card not found");
     }
@@ -30,7 +30,7 @@ export class CardsService {
   }
 
   /** Writes positions 0..n-1 (and the list) for the given cards, touching only rows that changed. */
-  private async renumber(tx: Prisma.TransactionClient, listId: string, ordered: Pick<CardRow, "id" | "listId" | "position">[]) {
+  private async renumber(tx: Prisma.TransactionClient, listId: string, ordered: { id: string; listId: string; position: number }[]) {
     for (const [position, card] of ordered.entries()) {
       if (card.position !== position || card.listId !== listId) {
         await tx.card.update({ where: { id: card.id }, data: { listId, position } });
@@ -52,6 +52,7 @@ export class CardsService {
           notes: body.notes ?? null,
           position,
         },
+        include: cardDetails,
       });
       return toCard(card);
     });
@@ -70,7 +71,7 @@ export class CardsService {
       if (body.cover !== undefined) data.cover = body.cover;
       if (body.dueDate !== undefined) data.dueDate = body.dueDate === null ? null : toDate(body.dueDate);
       if (body.notes !== undefined) data.notes = body.notes;
-      return toCard(await tx.card.update({ where: { id }, data }));
+      return toCard(await tx.card.update({ where: { id }, data, include: cardDetails }));
     });
   }
 
@@ -100,7 +101,7 @@ export class CardsService {
         const source = await tx.card.findMany({ where: { listId: card.listId }, orderBy: { position: "asc" } });
         await this.renumber(tx, card.listId, source);
       }
-      return toCard(await tx.card.findFirstOrThrow({ where: { id } }));
+      return toCard(await tx.card.findFirstOrThrow({ where: { id }, include: cardDetails }));
     });
   }
 }

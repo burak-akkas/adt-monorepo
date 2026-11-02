@@ -3,6 +3,12 @@ import { z } from "zod";
 // Limits and values mirror apps/web/src/lib/board/types.ts.
 export const MAX_CARD_TITLE_LENGTH = 120;
 export const MAX_NOTES_LENGTH = 1000;
+export const MAX_CHECKLIST_ITEM_LENGTH = 200;
+export const MAX_COMMENT_LENGTH = 1000;
+export const MAX_LABEL_LENGTH = 20;
+export const MAX_ACTIVITY_ENTRIES = 50;
+
+export const activityTypes = ["created", "moved", "title", "description", "priority", "dueDate"] as const;
 
 export const priorities = ["low", "medium", "high"] as const;
 export const coverColors = ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"] as const;
@@ -46,6 +52,29 @@ export const moveCardRequestSchema = z.object({
   position: z.number().int().min(0),
 });
 
+export const checklistItemSchema = z.object({
+  id: z.string(),
+  text: z.string().max(MAX_CHECKLIST_ITEM_LENGTH),
+  done: z.boolean(),
+  position: z.number().int(),
+});
+
+export const commentSchema = z.object({
+  id: z.string(),
+  text: z.string().max(MAX_COMMENT_LENGTH),
+  createdAt: z.string(),
+  editedAt: z.string().nullable(),
+});
+
+// `from` and `to` are list ids for `moved` and old/new values for `title`, `priority` and `dueDate`; omitted when empty.
+export const activityEntrySchema = z.object({
+  id: z.string(),
+  at: z.string(),
+  type: z.enum(activityTypes),
+  from: z.string().optional(),
+  to: z.string().optional(),
+});
+
 export const cardResponseSchema = z.object({
   id: z.string(),
   listId: z.string(),
@@ -56,6 +85,10 @@ export const cardResponseSchema = z.object({
   notes: z.string().nullable(),
   position: z.number().int(),
   createdAt: z.string(),
+  checklist: z.array(checklistItemSchema),
+  comments: z.array(commentSchema),
+  labels: z.array(z.string().max(MAX_LABEL_LENGTH)),
+  activity: z.array(activityEntrySchema).max(MAX_ACTIVITY_ENTRIES),
 });
 
 export type Priority = z.infer<typeof prioritySchema>;
@@ -63,4 +96,8 @@ export type CoverColor = z.infer<typeof coverColorSchema>;
 export type CreateCardRequest = z.infer<typeof createCardRequestSchema>;
 export type UpdateCardRequest = z.infer<typeof updateCardRequestSchema>;
 export type MoveCardRequest = z.infer<typeof moveCardRequestSchema>;
+export type ActivityType = (typeof activityTypes)[number];
+export type ChecklistItem = z.infer<typeof checklistItemSchema>;
+export type Comment = z.infer<typeof commentSchema>;
+export type ActivityEntry = z.infer<typeof activityEntrySchema>;
 export type CardResponse = z.infer<typeof cardResponseSchema>;
