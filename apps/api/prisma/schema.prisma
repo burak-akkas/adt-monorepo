@@ -24,6 +24,7 @@ model User {
   updatedAt     DateTime  @default(now()) @updatedAt
   sessions      Session[]
   accounts      Account[]
+  boards        Board[]
 
   @@map("user")
 }
@@ -73,4 +74,68 @@ model Verification {
 
   @@index([identifier])
   @@map("verification")
+}
+
+enum Priority {
+  low
+  medium
+  high
+}
+
+enum CoverColor {
+  red
+  orange
+  yellow
+  green
+  teal
+  blue
+  purple
+  pink
+}
+
+// Boards, lists and cards. `position` is a dense 0..n-1 integer within the parent, always read in order.
+// Case-insensitive unique names (board per user, list per board) are raw-SQL indexes in the add_boards
+// migration (`board_userId_lower_name_key`, `board_list_boardId_lower_name_key`); Prisma can't express them.
+model Board {
+  id        String      @id @default(uuid())
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @default(now()) @updatedAt
+  lists     BoardList[]
+
+  @@index([userId])
+  @@map("board")
+}
+
+model BoardList {
+  id        String   @id @default(uuid())
+  boardId   String
+  board     Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  name      String
+  position  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+  cards     Card[]
+
+  @@index([boardId, position])
+  @@map("board_list")
+}
+
+model Card {
+  id        String      @id @default(uuid())
+  listId    String
+  list      BoardList   @relation(fields: [listId], references: [id], onDelete: Cascade)
+  title     String
+  priority  Priority    @default(medium)
+  cover     CoverColor?
+  dueDate   DateTime?   @db.Date
+  notes     String?
+  position  Int
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @default(now()) @updatedAt
+
+  @@index([listId, position])
+  @@map("card")
 }
