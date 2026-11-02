@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { editCard } from "../support/cardActions";
+import { editCard } from "../../support/cardActions";
 
 test.beforeEach(async ({ context, page }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
