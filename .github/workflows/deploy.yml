@@ -1,0 +1,59 @@
+name: Deploy
+
+# Every push to main: migrate the database, deploy the API, deploy the web app. The web deploy runs last,
+# so /healthz reporting a commit means the whole deploy of that commit finished (AGENT_PRODUCTION_CHECK_URL).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  VERCEL: npx --yes vercel@65.9.0
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  COMMIT_SHA: ${{ github.sha }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Migrate the database
+        env:
+          DATABASE_URL_UNPOOLED: ${{ secrets.DATABASE_URL_UNPOOLED }}
+        run: npm run db:migrate:deploy -w apps/api
+
+      - name: Deploy the API
+        env:
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_API }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN_API }}
+        run: |
+          rm -rf .vercel
+          $VERCEL pull --yes --environment=production --token="$VERCEL_TOKEN"
+          $VERCEL build --prod --token="$VERCEL_TOKEN"
+          $VERCEL deploy --prebuilt --prod --yes --token="$VERCEL_TOKEN" --env COMMIT_SHA="$COMMIT_SHA"
+
+      - name: Deploy the web app
+        env:
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_WEB }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN_WEB }}
+          API_URL: ${{ vars.API_URL }}
+        run: |
+          rm -rf .vercel
+          $VERCEL pull --yes --environment=production --token="$VERCEL_TOKEN"
+          $VERCEL build --prod --token="$VERCEL_TOKEN"
+          $VERCEL deploy --prebuilt --prod --yes --token="$VERCEL_TOKEN"

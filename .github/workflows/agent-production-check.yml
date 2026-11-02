@@ -1,0 +1,51 @@
+name: "Agent · Production check"
+
+# After a PR merges into the default branch: does production serve the merged commit? Off unless the
+# repository variable AGENT_PRODUCTION_CHECK_URL is set, to a URL whose body contains the deployed commit's
+# sha (a health endpoint, or version.txt). AGENT_PRODUCTION_CHECK_MINUTES (default 15) is how long to wait
+# for the deploy. A failure opens one issue for a human. See scripts/agents/production-check.sh.
+# pull_request_target: runs this file from the default branch and never checks out the PR's code.
+on:
+  pull_request_target:
+    types: [closed]
+
+env:
+  AGENT_ESCALATION_ASSIGNEE: ${{ vars.AGENT_ESCALATION_ASSIGNEE }}
+
+jobs:
+  check:
+    # AGENT_PAUSED == 'true' stops every agent job (global pause switch).
+    if: >-
+      ${{ vars.AGENT_PAUSED != 'true' && vars.AGENT_PRODUCTION_CHECK_URL != '' &&
+          github.event.pull_request.merged && github.event.pull_request.base.ref == github.event.repository.default_branch }}
+    # A newer merge replaces the check of an older one: production only ever needs to serve the latest.
+    concurrency:
+      group: agent-production-check
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ vars.AGENT_APP_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: |
+            scripts/agents
+          token: ${{ steps.app.outputs.token }}
+          persist-credentials: false
+
+      - name: Check production
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          AGENT_PRODUCTION_CHECK_URL: ${{ vars.AGENT_PRODUCTION_CHECK_URL }}
+          AGENT_PRODUCTION_CHECK_MINUTES: ${{ vars.AGENT_PRODUCTION_CHECK_MINUTES }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: scripts/agents/production-check.sh "$SHA" "$BASE"

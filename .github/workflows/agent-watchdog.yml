@@ -1,0 +1,88 @@
+name: "Agent · Watchdog"
+
+# Finds issues and PRs whose agent state hasn't moved for AGENT_WATCHDOG_MINUTES (default 10) while
+# no agent run is queued or running for them, e.g. after a cancelled or crashed run, or a pending run
+# GitHub dropped from the concurrency queue. Re-triggers them up to AGENT_WATCHDOG_RETRIES times
+# (default 2) since the last Lead decision, then hands them to the Lead (or a human, if the Lead is
+# what stalls). It also restarts the merge queue when PRs wait in it but no Integrator run is active.
+# See scripts/agents/watchdog.sh. Manual runs can override the threshold and do a dry run.
+#
+# When it runs:
+#   - AGENT_WATCHDOG_MINUTES after an agent run finished. One check waits at a time and later runs queue
+#     behind it (GitHub keeps only the newest pending one), so while agents are busy elsewhere a stall is
+#     still caught within about two thresholds instead of only when all activity stops.
+#   - every 10 minutes as a backup. GitHub's scheduler is best effort and can skip runs entirely.
+on:
+  workflow_run:
+    workflows: ["Agent · Analyst", "Agent · Architect", "Agent · Implementor", "Agent · Reviewer",
+                "Agent · QA", "Agent · Lead", "Agent · Merge", "Agent · Integrator", "Agent · Sub-issues",
+                "Agent · Chat (@claude)"]
+    types: [completed]
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Stall threshold in minutes (default: AGENT_WATCHDOG_MINUTES or 10)"
+        required: false
+      dry_run:
+        description: "Only report, change nothing"
+        type: boolean
+        default: false
+
+env:
+  AGENT_ESCALATION_ASSIGNEE: ${{ vars.AGENT_ESCALATION_ASSIGNEE }}
+  AGENT_BOT_ID: ${{ vars.AGENT_BOT_ID }}   # the App's bot user id: unlike its login, it survives renames
+  AGENT_AVOID_CONFLICTS: ${{ vars.AGENT_AVOID_CONFLICTS }}           # conflict avoidance (overlap.sh, release-waiting.sh)
+  AGENT_CONFLICT_IGNORE: ${{ vars.AGENT_CONFLICT_IGNORE }}
+  AGENT_CONFLICT_WAIT_MINUTES: ${{ vars.AGENT_CONFLICT_WAIT_MINUTES }}
+
+jobs:
+  watch:
+    # Skipped agent runs (most label events) carry no information, so they don't restart the wait.
+    # AGENT_PAUSED == 'true' stops every agent job (global pause switch).
+    if: >-
+      ${{ vars.AGENT_PAUSED != 'true' && (
+        github.event_name != 'workflow_run' || github.event.workflow_run.conclusion != 'skipped'
+      ) }}
+    # Job-level, so skipped runs never enter the group. Runs after agent activity share one group and
+    # queue instead of cancelling each other: cancelling meant no check ever finished while any other
+    # issue kept the agents busy. Scheduled and manual runs queue in their own group.
+    concurrency:
+      group: agent-watchdog-${{ github.event_name == 'workflow_run' && 'after-run' || 'check' }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Wait for activity to settle
+        if: github.event_name == 'workflow_run'
+        run: sleep $(( (${{ vars.AGENT_WATCHDOG_MINUTES || '10' }} + 1) * 60 ))
+
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ vars.AGENT_APP_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          sparse-checkout: scripts/agents
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Re-trigger stalled work
+        env:
+          # The App token, so the re-applied labels trigger the agent workflows.
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          AGENT_WATCHDOG_MINUTES: ${{ inputs.minutes || vars.AGENT_WATCHDOG_MINUTES || '10' }}
+          AGENT_WATCHDOG_RETRIES: ${{ vars.AGENT_WATCHDOG_RETRIES || '2' }}
+          AGENT_AUTO_MERGE: ${{ vars.AGENT_AUTO_MERGE }}   # restarts the merge queue only while merging is on
+        run: scripts/agents/watchdog.sh ${{ inputs.dry_run && '--dry-run' || '' }} | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Advance split issues
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: scripts/agents/subissues.sh --sweep | tee -a "$GITHUB_STEP_SUMMARY"

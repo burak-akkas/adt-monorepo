@@ -1,0 +1,31 @@
+{
+  "name": "@adt/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@adt/contracts": "*",
+    "next": "^16.4.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "jsdom": "^30.1.3",
+    "tailwindcss": "^4.3.3",
+    "vitest": "^4.1.2"
+  }
+}

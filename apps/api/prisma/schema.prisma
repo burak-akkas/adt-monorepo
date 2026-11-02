@@ -1,0 +1,14 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Small key-value settings. It also proves the path from migration to deployed code.
+model AppSetting {
+  key   String @id
+  value String
+}

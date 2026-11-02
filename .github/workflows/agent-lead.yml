@@ -1,0 +1,152 @@
+name: "Agent · Lead"
+
+# The decision maker. Runs when any issue or PR gets `agent:needs-decision`
+# (open questions, high-risk design, review deadlock, agent failure).
+# It picks one action that unblocks the team, or escalates to a human (`agent:needs-human`).
+# Budget: AGENT_MAX_LEAD_DECISIONS per item (default 3), then it always escalates.
+# PR events use pull_request_target: unlike pull_request, it also fires for PRs with merge
+# conflicts (GitHub creates no merge commit for those), and it always runs this workflow
+# file from the default branch. Jobs only act on same-repo PRs and check out the PR head explicitly.
+on:
+  issues:
+    types: [labeled]
+  pull_request_target:
+    types: [labeled]
+
+env:
+  AGENT_ESCALATION_ASSIGNEE: ${{ vars.AGENT_ESCALATION_ASSIGNEE }}
+  AGENT_BOT_ID: ${{ vars.AGENT_BOT_ID }}   # the App's bot user id: unlike its login, it survives renames
+
+jobs:
+  lead:
+    # AGENT_PAUSED == 'true' stops every agent job (global pause switch).
+    if: >-
+      ${{ vars.AGENT_PAUSED != 'true' && (
+        github.event.label.name == 'agent:needs-decision' && (github.event_name == 'issues' || github.event.pull_request.head.repo.full_name == github.repository)
+      ) }}
+    concurrency:
+      group: agent-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      N: ${{ github.event.issue.number || github.event.pull_request.number }}
+      KIND: ${{ github.event_name == 'issues' && 'issue' || 'pr' }}
+      TRUSTED: .agent-trusted/.github/agents
+      BIN: .agent-trusted/scripts/agents
+      MAX_DECISIONS: ${{ vars.AGENT_MAX_LEAD_DECISIONS || '3' }}
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ vars.AGENT_APP_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.event.repository.default_branch }}
+          fetch-depth: 1
+          token: ${{ steps.app.outputs.token }}
+
+      # Role prompts and scripts always come from the default branch.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .agent-trusted
+          sparse-checkout: |
+            .github/agents
+            scripts/agents
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Decision budget
+        id: guard
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          mkdir -p .agent-out
+          printf '.agent-out/\n.agent-trusted/\n' >> .git/info/exclude
+          used=$("$BIN/count-comments.sh" "$N" lead)
+          echo "used=$used" >> "$GITHUB_OUTPUT"
+          if [ "$used" -ge "$MAX_DECISIONS" ]; then
+            "$BIN/transition.sh" "$N" agent:needs-human
+            gh api "repos/$GITHUB_REPOSITORY/issues/$N/comments" -f body="🛑 Lead has already made $used decisions here without resolving it. Escalating to a human." >/dev/null
+            echo "stop=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: anthropics/claude-code-action@v1
+        id: agent
+        if: steps.guard.outputs.stop != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app.outputs.token }}
+          allowed_bots: ${{ steps.app.outputs.app-slug }}[bot]
+          prompt: |
+            You are the LEAD agent. Read ${{ env.TRUSTED }}/lead.md and follow it exactly.
+            The other roles are described in ${{ env.TRUSTED }}/ (analyst.md, architect.md, implementor.md, reviewer.md, qa.md).
+
+            Repository: ${{ github.repository }}
+            Item: ${{ env.KIND }} #${{ env.N }}
+            Default branch: ${{ github.event.repository.default_branch }} (all agent branches start from it and PRs target it)
+            Decisions already made on this item: ${{ steps.guard.outputs.used }} of ${{ env.MAX_DECISIONS }}
+
+            Tool rules: create files only with the Write tool (bodies go in .agent-out/, then use --body-file).
+            Run every shell command on its own: no &&, ||, ;, pipes, redirects, heredocs or subshells.
+            Compound commands are blocked by the permission system.
+          claude_args: |
+            --max-turns 40
+            ${{ (vars.AGENT_LEAD_MODEL || vars.AGENT_MODEL) && format('--model {0}', vars.AGENT_LEAD_MODEL || vars.AGENT_MODEL) || '' }}
+            --allowedTools "Read,Grep,Glob,Write,Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue comment:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh pr comment:*),Bash(git log:*)"
+            --json-schema '{"type":"object","properties":{"action":{"type":"string","enum":["restart-analysis","redesign","implement","fix","re-review","qa","approve","close","escalate"]},"rationale":{"type":"string"}},"required":["action","rationale"]}'
+
+      - name: Report denied tools
+        if: ${{ !cancelled() && steps.agent.outputs.execution_file != '' }}
+        run: |
+          denied=$(jq -r '.[] | select(.type == "result") | .permission_denials[]? | "- `\(.tool_name)`: `\(.tool_input | tostring | .[0:300])`"' \
+                   "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || true)
+          if [ -n "$denied" ]; then
+            printf '### Denied tool calls\n%s\n' "$denied" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Agent had denied tool calls, see the job summary"
+          fi
+
+      - name: Apply decision
+        if: ${{ !cancelled() && steps.guard.outputs.stop != 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          OUT: ${{ steps.agent.outputs.structured_output }}
+          USED: ${{ steps.guard.outputs.used }}
+        run: |
+          action=$(echo "${OUT:-null}" | jq -r '.action // "error"')
+          reason=$(echo "${OUT:-null}" | jq -r '.rationale // "no rationale"')
+          if [ "$("$BIN/count-comments.sh" "$N" lead)" -le "$USED" ]; then
+            echo "::warning::Lead returned '$action' but posted no decision comment"
+            action=missing-comment
+          fi
+          echo "Lead decision on $KIND #$N: $action ($reason)" >> "$GITHUB_STEP_SUMMARY"
+
+          case "$KIND:$action" in
+            issue:restart-analysis) "$BIN/transition.sh" "$N" agent:start ;;
+            issue:redesign)         "$BIN/transition.sh" "$N" agent:analyzed ;;
+            issue:implement)        "$BIN/transition.sh" "$N" agent:ready ;;
+            issue:close)            "$BIN/transition.sh" "$N" agent:out-of-scope
+                                    gh issue close "$N" --reason "not planned" ;;
+            pr:fix)                 "$BIN/transition.sh" "$N" agent:changes-requested ;;
+            pr:re-review)           "$BIN/transition.sh" "$N" agent:review ;;
+            pr:qa)                  "$BIN/transition.sh" "$N" agent:qa ;;
+            pr:approve)             "$BIN/approve.sh" "$N" "${{ github.event.pull_request.head.sha }}" lead ;;
+            pr:close)               "$BIN/transition.sh" "$N"
+                                    gh pr close "$N" --delete-branch ;;
+            *:escalate)             "$BIN/transition.sh" "$N" agent:needs-human ;;
+            *)                      "$BIN/transition.sh" "$N" agent:needs-human
+                                    gh api "repos/$GITHUB_REPOSITORY/issues/$N/comments" \
+                                      -f body="⚠️ Lead could not decide ('$action', [run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Escalating to a human." >/dev/null ;;
+          esac
+          if [ "$KIND" = "issue" ]; then
+            .agent-trusted/scripts/agents/progress.sh "$N" "🧭 **Lead**: $action"
+          else
+            .agent-trusted/scripts/agents/progress.sh --pr "$N" "🧭 **Lead** (on #$N): $action"
+          fi

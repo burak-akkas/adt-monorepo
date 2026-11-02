@@ -1,0 +1,50 @@
+name: "Agent · Sub-issues"
+
+# Trigger: an issue created by split.sh (the Architect split its parent) is closed,
+# by a merged PR, by the Lead or by a human.
+#   - completed: unblocks sibling sub-issues whose dependencies are all done (`agent:blocked` -> `agent:analyzed`)
+#     and closes the parent when every sub-issue is done
+#   - not planned: hands the parent to the Lead
+on:
+  issues:
+    types: [closed]
+
+env:
+  AGENT_ESCALATION_ASSIGNEE: ${{ vars.AGENT_ESCALATION_ASSIGNEE }}
+  AGENT_BOT_ID: ${{ vars.AGENT_BOT_ID }}   # the App's bot user id: unlike its login, it survives renames
+
+jobs:
+  advance:
+    # AGENT_PAUSED == 'true' stops every agent job (global pause switch).
+    if: >-
+      ${{ vars.AGENT_PAUSED != 'true' && (
+        contains(github.event.issue.body, '<!-- agent:sub-issue') && !github.event.issue.pull_request
+      ) }}
+    # One at a time across the repo: two sub-issues closing together must not both close the parent.
+    concurrency:
+      group: agent-subissues
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ vars.AGENT_APP_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          sparse-checkout: scripts/agents
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Unblock sub-issues, close the parent when all are done
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        # The sweep catches up on closures whose runs GitHub dropped from the shared queue.
+        run: |
+          scripts/agents/subissues.sh "${{ github.event.issue.number }}" | tee -a "$GITHUB_STEP_SUMMARY"
+          scripts/agents/subissues.sh --sweep | tee -a "$GITHUB_STEP_SUMMARY"

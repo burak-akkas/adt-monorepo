@@ -1,0 +1,120 @@
+name: "Agent · Analyst"
+
+# Triggers:
+#   - a new issue (only when the repo variable AGENT_AUTO_START == 'true')
+# Only the owner, org members and collaborators can trigger agents. Outsiders' issues
+# and comments are ignored before any job starts (labels already require write access).
+#   - a human applies the `agent:start` label
+#   - a human replies on an issue that is in `agent:needs-info`
+on:
+  issues:
+    types: [opened, labeled]
+  issue_comment:
+    types: [created]
+
+env:
+  AGENT_ESCALATION_ASSIGNEE: ${{ vars.AGENT_ESCALATION_ASSIGNEE }}
+  AGENT_BOT_ID: ${{ vars.AGENT_BOT_ID }}   # the App's bot user id: unlike its login, it survives renames
+
+jobs:
+  analyst:
+    # AGENT_PAUSED == 'true' stops every agent job (global pause switch).
+    if: >-
+      ${{ vars.AGENT_PAUSED != 'true' && (
+        !github.event.issue.pull_request && ( (github.event.action == 'opened' && vars.AGENT_AUTO_START == 'true' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) && !contains(github.event.issue.labels.*.name, 'agent:start')) || (github.event.action == 'labeled' && github.event.label.name == 'agent:start') || (github.event_name == 'issue_comment' && contains(github.event.issue.labels.*.name, 'agent:needs-info') && github.event.comment.user.type != 'Bot' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) )
+      ) }}
+    concurrency:
+      group: agent-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ vars.AGENT_APP_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Prepare scratch dir
+        run: mkdir -p .agent-out && echo ".agent-out/" >> .git/info/exclude
+
+      - name: Count handoff comments
+        id: before
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: echo "count=$(scripts/agents/count-comments.sh ${{ github.event.issue.number }} analyst)" >> "$GITHUB_OUTPUT"
+
+      - uses: anthropics/claude-code-action@v1
+        id: agent
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app.outputs.token }}
+          allowed_bots: ${{ steps.app.outputs.app-slug }}[bot]
+          prompt: |
+            You are the ANALYST agent. Read .github/agents/analyst.md and follow it exactly.
+
+            Repository: ${{ github.repository }}
+            Issue: #${{ github.event.issue.number }}
+
+            Tool rules: create files only with the Write tool (bodies go in .agent-out/, then use --body-file).
+            Run every shell command on its own: no &&, ||, ;, pipes, redirects, heredocs or subshells.
+            Compound commands are blocked by the permission system.
+          claude_args: |
+            --max-turns 25
+            ${{ vars.AGENT_MODEL && format('--model {0}', vars.AGENT_MODEL) || '' }}
+            --allowedTools "Read,Grep,Glob,Write,Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue comment:*)"
+            --json-schema '{"type":"object","properties":{"decision":{"type":"string","enum":["analyzed","needs-info","out-of-scope"]},"summary":{"type":"string"}},"required":["decision"]}'
+
+      - name: Report denied tools
+        if: ${{ !cancelled() && steps.agent.outputs.execution_file != '' }}
+        run: |
+          denied=$(jq -r '.[] | select(.type == "result") | .permission_denials[]? | "- `\(.tool_name)`: `\(.tool_input | tostring | .[0:300])`"' \
+                   "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || true)
+          if [ -n "$denied" ]; then
+            printf '### Denied tool calls\n%s\n' "$denied" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Agent had denied tool calls, see the job summary"
+          fi
+
+      - name: Apply state transition
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          OUT: ${{ steps.agent.outputs.structured_output }}
+          N: ${{ github.event.issue.number }}
+          BEFORE: ${{ steps.before.outputs.count }}
+          AUTONOMY: ${{ vars.AGENT_AUTONOMY }}
+        run: |
+          decision=$(echo "${OUT:-null}" | jq -r '.decision // "error"')
+          after=$(scripts/agents/count-comments.sh "$N" analyst)
+          if [ "$after" -le "${BEFORE:-0}" ]; then
+            echo "::warning::analyst returned '$decision' but posted no handoff comment"
+            decision=missing-comment
+          fi
+          case "$decision" in
+            analyzed)     scripts/agents/transition.sh "$N" agent:analyzed ;;
+            needs-info)   if [ "$AUTONOMY" = "full" ]; then
+                            scripts/agents/transition.sh "$N" agent:needs-decision
+                          else
+                            scripts/agents/transition.sh "$N" agent:needs-info
+                          fi ;;
+            out-of-scope) scripts/agents/transition.sh "$N" agent:out-of-scope ;;
+            *)            scripts/agents/transition.sh "$N" agent:needs-decision
+                          gh issue comment "$N" --body "⚠️ Analyst agent failed ([run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Handing to the Lead." ;;
+          esac
+          case "$decision" in
+            analyzed)     msg="analyzed: problem statement and acceptance criteria above" ;;
+            needs-info)   msg="has open questions (see above)" ;;
+            out-of-scope) msg="out of scope (see above)" ;;
+            *)            msg="failed, handed to the Lead" ;;
+          esac
+          scripts/agents/progress.sh "$N" "🔍 **Analyst**: $msg"

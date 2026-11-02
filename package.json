@@ -1,0 +1,22 @@
+{
+  "name": "adt-monorepo",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "22.x" },
+  "workspaces": ["packages/contracts", "apps/api", "apps/web"],
+  "scripts": {
+    "postinstall": "npm run build -w packages/contracts && npm run db:generate -w apps/api",
+    "lint": "oxlint apps packages tests",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "e2e": "playwright test",
+    "stack": "bash tools/start-stack.sh 3000 4000 kanban",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "oxlint": "^1.90.0",
+    "typescript": "^6.0.2"
+  }
+}

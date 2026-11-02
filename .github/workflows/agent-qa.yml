@@ -1,0 +1,484 @@
+name: "Agent · QA"
+
+# Runs when a PR gets `agent:qa`: by default the Integrator holds the PR at the front of the merge queue
+# (up to date, required checks green) and the queue waits for QA's verdict. With AGENT_QA_STAGE == 'review',
+# right after the Reviewer approved. The Lead can also send a PR to QA.
+#   1. Waits for the required checks (AGENT_REQUIRED_CHECKS): red goes straight back to the Implementor, no QA run
+#      Then waits until the PR preview serves this exact commit (<preview>/version.txt == head SHA)
+#   2. Runs the project's Playwright e2e suite against the preview
+#   3. The QA agent tests the acceptance criteria in a real browser (Playwright MCP), compares the changed
+#      screens with the baseline site (the base branch, before this PR) and takes screenshots
+#   4. Screenshots go to the PR as a gallery. pass -> merge gate, which hands a held PR back to the Integrator
+#      (or queues it), fail -> Implementor fixes (and the queue moves on), unsure -> Lead
+# Preview URL template: AGENT_PREVIEW_URL (default https://{owner}.github.io/{repo}/pr-{pr}/), serving
+# version.txt with the commit it was built from. `deployment`: the URL of a successful GitHub deployment of
+# the PR's head commit (Vercel, Netlify, Render…; AGENT_PREVIEW_ENVIRONMENT narrows it). `none`: no
+# preview deploy; QA starts the app itself with AGENT_QA_START_COMMAND and tests AGENT_QA_LOCAL_URL
+# (default http://localhost:3000/) on the runner.
+# The e2e suite: AGENT_E2E_SETUP (default `npm ci`) then AGENT_E2E_COMMAND (default `npx playwright test`),
+# with E2E_BASE_URL set to the URL under test. AGENT_E2E_COMMAND=none skips the suite.
+# Toolchain: AGENT_NODE_VERSION (`none` skips Node; QA's browser tools still need npx, so keep Node
+# when QA is on), AGENT_SETUP_COMMAND (runs before the e2e setup).
+# Screenshots: AGENT_QA_SCREENSHOTS=pages (gh-pages branch, shown inline in the PR; the default for
+# public repositories) or artifact (only the run's artifacts, linked from the PR; the default for
+# private repositories, where raw gh-pages image links don't render).
+# Baseline URL template: AGENT_BASELINE_URL (default https://{owner}.github.io/{repo}/, the production deploy
+# of the base branch; `none` turns the visual comparison off). It should serve version.txt too.
+# AGENT_BASELINE_START_COMMAND: start the baseline on the runner instead, from a checkout of the base branch
+# outside the workspace, answering at AGENT_BASELINE_LOCAL_URL (default http://localhost:3001/). For apps that
+# store data on a server, where QA must not write test data to production. It needs its own port and database.
+# PR events use pull_request_target: unlike pull_request, it also fires for PRs with merge
+# conflicts (GitHub creates no merge commit for those), and it always runs this workflow
+# file from the default branch. Jobs only act on same-repo PRs and check out the PR head explicitly.
+on:
+  pull_request_target:
+    types: [labeled]
+
+env:
+  AGENT_ESCALATION_ASSIGNEE: ${{ vars.AGENT_ESCALATION_ASSIGNEE }}
+  AGENT_BOT_ID: ${{ vars.AGENT_BOT_ID }}   # the App's bot user id: unlike its login, it survives renames
+
+jobs:
+  qa:
+    # AGENT_PAUSED == 'true' stops every agent job (global pause switch).
+    if: >-
+      ${{ vars.AGENT_PAUSED != 'true' && (
+        github.event.label.name == 'agent:qa' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository
+      ) }}
+    concurrency:
+      group: agent-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      TRUSTED: .agent-trusted/.github/agents
+      BIN: .agent-trusted/scripts/agents
+      MAX_ROUNDS: ${{ vars.AGENT_MAX_QA_ROUNDS || '3' }}
+      URL_TEMPLATE: ${{ vars.AGENT_PREVIEW_URL || 'https://{owner}.github.io/{repo}/pr-{pr}/' }}
+      # The baseline defaults to the production site; without GitHub Pages previews, to AGENT_PRODUCTION_URL or none.
+      BASELINE_TEMPLATE: ${{ vars.AGENT_BASELINE_URL || ((vars.AGENT_PREVIEW_URL == 'none' || vars.AGENT_PREVIEW_URL == 'deployment') && (vars.AGENT_PRODUCTION_URL || 'none')) || vars.AGENT_PRODUCTION_URL || 'https://{owner}.github.io/{repo}/' }}
+      LOCAL: ${{ vars.AGENT_PREVIEW_URL == 'none' && 'true' || '' }}
+      LOCAL_URL: ${{ vars.AGENT_QA_LOCAL_URL || 'http://localhost:3000/' }}
+      SCREENSHOTS: ${{ vars.AGENT_QA_SCREENSHOTS || (github.event.repository.private && 'artifact') || 'pages' }}
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ vars.AGENT_APP_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          token: ${{ steps.app.outputs.token }}
+          # QA runs the PR's code (npm ci, the e2e suite, the started app): leave no token in .git/config
+          # for it. Later steps use GH_TOKEN, and the agent action sets up its own git auth.
+          persist-credentials: false
+
+      # Role prompts and scripts always come from the default branch.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .agent-trusted
+          sparse-checkout: |
+            .github/agents
+            scripts/agents
+          token: ${{ steps.app.outputs.token }}
+          persist-credentials: false
+
+      - name: Round guard
+        id: guard
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          mkdir -p .agent-out/screenshots
+          printf '.agent-out/\n.agent-trusted/\n.gh-pages/\n' >> .git/info/exclude
+          # A queued run may be stale by now (new commits, merge-gate verdict, conflict): don't spend a round on it.
+          skip=$("$BIN/pr-still-current.sh" "$PR" "$HEAD_SHA" agent:qa)
+          if [ -n "$skip" ]; then
+            echo "Skipped QA: ${skip#skip=}" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "stop=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$LOCAL" = true ]; then
+            url="$LOCAL_URL"
+          else
+            url=$(echo "$URL_TEMPLATE" | sed -e "s|{owner}|${GITHUB_REPOSITORY_OWNER}|g" \
+                  -e "s|{repo}|${GITHUB_REPOSITORY#*/}|g" -e "s|{pr}|$PR|g")
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          # QA rounds are counted since the latest Lead decision. Only failed rounds count toward the
+          # budget: QA re-runs after base updates are not a loop.
+          comments=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+                       | jq --argjson bot "${AGENT_BOT_ID:?AGENT_BOT_ID must be set}" '[[.[][] | select(.user.id == $bot)]]')
+          total=$(echo "$comments" | jq '[.[][] | select(.body | contains("<!-- agent:qa -->"))] | length')
+          rounds=$(echo "$comments" | jq '[.[][]] as $c
+            | ([$c | to_entries[] | select(.value.body | contains("<!-- agent:lead -->")) | .key] | max // -1) as $last
+            | [$c | to_entries[] | select(.key > $last and (.value.body | contains("<!-- agent:qa -->")))] | length')
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+          echo "round=$((rounds + 1))" >> "$GITHUB_OUTPUT"
+          failed=$(echo "$comments" | jq '[.[][]] as $c
+            | ([$c | to_entries[] | select(.value.body | contains("<!-- agent:lead -->")) | .key] | max // -1) as $last
+            | [$c | to_entries[] | select(.key > $last and (.value.body | contains("<!-- agent:qa -->"))
+                and (.value.body | test("\\*\\*Verdict:\\*\\*\\s*pass") | not))] | length')
+          if [ "$failed" -ge "$MAX_ROUNDS" ]; then
+            "$BIN/transition.sh" "$PR" agent:needs-decision
+            gh pr comment "$PR" --body "🛑 $MAX_ROUNDS QA rounds without a pass. Handing to the Lead."
+            echo "stop=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # QA is the most expensive agent run, and the merge queue requires these checks anyway: don't
+      # spend a QA round on a commit that can never merge. Red checks go straight back to the Implementor.
+      - name: Wait for required checks
+        id: ci
+        if: steps.guard.outputs.stop != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          AGENT_REQUIRED_CHECKS: ${{ vars.AGENT_REQUIRED_CHECKS || 'CI' }}
+        run: |
+          # Same rules as the merge queue: only the required workflows that apply to the files this PR
+          # changes count (pr-paths.sh). Up to 25 minutes; on timeout QA runs anyway (the merge queue
+          # still waits for the checks).
+          REQUIRED=$("$BIN/pr-paths.sh" required "$PR" | paste -sd, -)
+          if [ -z "$REQUIRED" ]; then echo "result=pass" >> "$GITHUB_OUTPUT"; exit 0; fi
+          filter='[.[] | select(.workflow as $w | ($req | split(",") | map(gsub("^ +| +$"; ""))) | index($w))]'
+          for _ in $(seq 1 50); do
+            json=$(gh pr checks "$PR" -R "$GITHUB_REPOSITORY" --json workflow,name,bucket,link 2>/dev/null || true)
+            checks=$(echo "${json:-[]}" | jq --arg req "$REQUIRED" "$filter")
+            failed=$(echo "$checks" | jq -r '[.[] | select(.bucket == "fail" or .bucket == "cancel") | "[\(.name)](\(.link))"] | join(", ")')
+            pending=$(echo "$checks" | jq '[.[] | select(.bucket == "pending")] | length')
+            if [ -n "$failed" ]; then echo "result=fail" >> "$GITHUB_OUTPUT"; echo "failed=$failed" >> "$GITHUB_OUTPUT"; exit 0; fi
+            if [ "$(echo "$checks" | jq length)" -gt 0 ] && [ "$pending" -eq 0 ]; then echo "result=pass" >> "$GITHUB_OUTPUT"; exit 0; fi
+            sleep 30
+          done
+          echo "result=timeout" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the preview of this commit
+        id: preview
+        if: steps.guard.outputs.stop != 'true' && steps.ci.outputs.result != 'fail' && env.LOCAL != 'true'
+        env:
+          URL: ${{ steps.guard.outputs.url }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          ENVIRONMENT: ${{ vars.AGENT_PREVIEW_ENVIRONMENT }}
+        run: |
+          # AGENT_PREVIEW_URL=deployment: the preview is whatever deployment of this exact commit reports
+          # success to GitHub (Vercel, Netlify, Render and most hosts do), optionally only in
+          # AGENT_PREVIEW_ENVIRONMENT. Its environment_url is the URL QA tests. Needs the App's
+          # Deployments: Read permission.
+          if [ "$URL" = deployment ]; then
+            for _ in $(seq 1 80); do
+              found=$(gh api "repos/$GITHUB_REPOSITORY/deployments?sha=$HEAD_SHA&per_page=30" 2>/dev/null \
+                | jq -r --arg env "$ENVIRONMENT" '.[] | select($env == "" or .environment == $env) | .statuses_url' \
+                | while read -r statuses; do
+                    gh api "$statuses?per_page=1" --jq '.[0] | select(.state == "success") | .environment_url // empty' 2>/dev/null
+                  done | grep -m1 . || true)
+              if [ -n "$found" ]; then
+                echo "url=${found%/}/" >> "$GITHUB_OUTPUT"; echo "ready=true" >> "$GITHUB_OUTPUT"; exit 0
+              fi
+              sleep 15
+            done
+            echo "::warning::No successful deployment of $HEAD_SHA${ENVIRONMENT:+ in $ENVIRONMENT} reported a URL"
+            exit 0
+          fi
+          # Otherwise the preview serves version.txt with the commit it was built from.
+          for _ in $(seq 1 60); do
+            live=$(curl -fsSL "${URL}version.txt?t=$(date +%s)" 2>/dev/null | tr -d '[:space:]' || true)
+            if [ "$live" = "$HEAD_SHA" ]; then echo "url=$URL" >> "$GITHUB_OUTPUT"; echo "ready=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+            sleep 15
+          done
+          echo "::warning::Preview at $URL never served $HEAD_SHA (last seen: ${live:-nothing})"
+
+      # The project's toolchain (same variables as the Implementor). The npm cache only when the
+      # project uses npm (a package-lock.json at the root).
+      - uses: actions/setup-node@v4
+        if: (steps.preview.outputs.ready == 'true' || (env.LOCAL == 'true' && steps.guard.outputs.stop != 'true' && steps.ci.outputs.result != 'fail')) && vars.AGENT_NODE_VERSION != 'none'
+        with:
+          node-version: ${{ vars.AGENT_NODE_VERSION || '22' }}
+          cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}
+
+      - name: Project setup
+        if: (steps.preview.outputs.ready == 'true' || (env.LOCAL == 'true' && steps.guard.outputs.stop != 'true' && steps.ci.outputs.result != 'fail')) && vars.AGENT_SETUP_COMMAND != ''
+        env:
+          SETUP: ${{ vars.AGENT_SETUP_COMMAND }}
+        run: bash -eo pipefail -c "$SETUP"
+
+      # Before anything starts: `npm ci` deletes node_modules, also under an app that is already running.
+      - name: E2E setup
+        if: (steps.preview.outputs.ready == 'true' || (env.LOCAL == 'true' && steps.guard.outputs.stop != 'true' && steps.ci.outputs.result != 'fail'))
+        env:
+          E2E_SETUP: ${{ vars.AGENT_E2E_SETUP || 'npm ci' }}
+          E2E_COMMAND: ${{ vars.AGENT_E2E_COMMAND || 'npx playwright test' }}
+        run: |
+          if [ "$E2E_COMMAND" != none ] && [ "$E2E_SETUP" != none ]; then bash -eo pipefail -c "$E2E_SETUP"; fi
+
+      # The baseline on the runner (AGENT_BASELINE_START_COMMAND): the base branch, for QA's visual comparison.
+      # It moves out of the workspace first, so that the PR's own build and tests never pick up its files.
+      - uses: actions/checkout@v6
+        if: (steps.preview.outputs.ready == 'true' || (env.LOCAL == 'true' && steps.guard.outputs.stop != 'true' && steps.ci.outputs.result != 'fail')) && vars.AGENT_BASELINE_START_COMMAND != ''
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          path: .agent-baseline
+          fetch-depth: 1
+          token: ${{ steps.app.outputs.token }}
+          persist-credentials: false
+
+      - name: Start the baseline locally
+        id: baseline_local
+        if: (steps.preview.outputs.ready == 'true' || (env.LOCAL == 'true' && steps.guard.outputs.stop != 'true' && steps.ci.outputs.result != 'fail')) && vars.AGENT_BASELINE_START_COMMAND != ''
+        env:
+          START: ${{ vars.AGENT_BASELINE_START_COMMAND }}
+          URL: ${{ vars.AGENT_BASELINE_LOCAL_URL || 'http://localhost:3001/' }}
+        run: |
+          dir="$RUNNER_TEMP/agent-baseline"
+          mv .agent-baseline "$dir"
+          commit=$(git -C "$dir" rev-parse --short HEAD)
+          log="$PWD/.agent-out/baseline.log"
+          (cd "$dir" && nohup bash -c "$START" > "$log" 2>&1 &)
+          for _ in $(seq 1 120); do
+            if curl -fsS -o /dev/null "$URL" 2>/dev/null; then
+              echo "info=$URL (the base branch at $commit, running on this machine with its own data)" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::warning::The baseline never answered at $URL"; tail -30 "$log"
+          echo "info=none (the baseline never answered at $URL on this machine)" >> "$GITHUB_OUTPUT"
+
+      # No preview deploy (AGENT_PREVIEW_URL=none): start the app on the runner and wait until it answers.
+      - name: Start the app locally
+        id: local
+        if: env.LOCAL == 'true' && steps.guard.outputs.stop != 'true' && steps.ci.outputs.result != 'fail'
+        env:
+          START: ${{ vars.AGENT_QA_START_COMMAND }}
+          URL: ${{ steps.guard.outputs.url }}
+        run: |
+          if [ -z "$START" ]; then
+            echo "::error::AGENT_PREVIEW_URL is none, so QA needs AGENT_QA_START_COMMAND to start the app"
+            exit 0
+          fi
+          nohup bash -c "$START" > .agent-out/app.log 2>&1 &
+          for _ in $(seq 1 120); do
+            if curl -fsS -o /dev/null "$URL" 2>/dev/null; then echo "ready=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+            sleep 5
+          done
+          echo "::warning::The app never answered at $URL"; tail -30 .agent-out/app.log
+
+      # The "before" side of QA's visual comparison. It's informational: QA runs either way, and is told
+      # when the baseline lags the base branch (e.g. a production deploy still running).
+      - name: Find the baseline
+        id: baseline
+        if: steps.preview.outputs.ready == 'true' || steps.local.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          LOCAL_BASELINE: ${{ steps.baseline_local.outputs.info }}
+        run: |
+          if [ -n "$LOCAL_BASELINE" ]; then
+            echo "info=$LOCAL_BASELINE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$BASELINE_TEMPLATE" = "none" ]; then
+            echo "info=none (visual comparison turned off)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          url=$(echo "$BASELINE_TEMPLATE" | sed -e "s|{owner}|${GITHUB_REPOSITORY_OWNER}|g" -e "s|{repo}|${GITHUB_REPOSITORY#*/}|g")
+          live=$(curl -fsSL "${url}version.txt?t=$(date +%s)" 2>/dev/null | tr -d '[:space:]' || true)
+          base_sha=$(gh api "repos/$GITHUB_REPOSITORY/branches/$BASE" --jq .commit.sha 2>/dev/null || true)
+          if ! curl -fsSL -o /dev/null "$url" 2>/dev/null; then
+            info="none (the baseline at $url is unreachable)"
+          elif [ -z "$live" ]; then
+            info="$url (serves an unknown commit: no version.txt)"
+          elif [ "$live" = "$base_sha" ]; then
+            info="$url (serves ${live:0:7}, the head of \`$BASE\`)"
+          else
+            info="$url (serves ${live:0:7}, but \`$BASE\` is at ${base_sha:0:7}, so it lags the base branch)"
+          fi
+          echo "info=$info" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Run e2e suite
+        id: e2e
+        if: steps.preview.outputs.ready == 'true' || steps.local.outputs.ready == 'true'
+        env:
+          E2E_BASE_URL: ${{ steps.preview.outputs.url || steps.guard.outputs.url }}
+          CI: "true"
+          E2E_COMMAND: ${{ vars.AGENT_E2E_COMMAND || 'npx playwright test' }}
+        run: |
+          if [ "$E2E_COMMAND" = none ]; then
+            echo "No e2e suite (AGENT_E2E_COMMAND=none)" > .agent-out/e2e-results.txt
+            echo "exit=none" >> "$GITHUB_OUTPUT"
+          else
+            set +e
+            bash -o pipefail -c "$E2E_COMMAND" > .agent-out/e2e-results.txt 2>&1
+            echo "exit=$?" >> "$GITHUB_OUTPUT"
+            set -e
+            tail -20 .agent-out/e2e-results.txt
+          fi
+          cat > .agent-out/mcp.json <<'EOF'
+          {"mcpServers":{"playwright":{"command":"npx","args":["-y","@playwright/mcp@0.0.83","--headless","--isolated","--viewport-size","1280x800","--output-dir",".agent-out/screenshots"]}}}
+          EOF
+
+      - uses: anthropics/claude-code-action@v1
+        id: agent
+        if: steps.preview.outputs.ready == 'true' || steps.local.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app.outputs.token }}
+          allowed_bots: ${{ steps.app.outputs.app-slug }}[bot]
+          prompt: |
+            You are the QA agent. Read ${{ env.TRUSTED }}/qa.md and follow it exactly.
+
+            Repository: ${{ github.repository }}
+            Pull request: #${{ github.event.pull_request.number }}
+            QA round: ${{ steps.guard.outputs.round }} of ${{ env.MAX_ROUNDS }}
+            Preview URL (serving commit ${{ github.event.pull_request.head.sha }}): ${{ steps.preview.outputs.url || steps.guard.outputs.url }}
+            Baseline URL (the base branch without this PR): ${{ steps.baseline.outputs.info }}
+            ${{ env.LOCAL == 'true' && 'The URL is the app running on this machine (no preview deploy): test it the same way.' || '' }}
+            Automated e2e results: .agent-out/e2e-results.txt (exit code ${{ steps.e2e.outputs.exit }}; 0 = all passed, none = the project has no e2e suite)
+
+            Tool rules: create files only with the Write tool (bodies go in .agent-out/, then use --body-file).
+            Run every shell command on its own: no &&, ||, ;, pipes, redirects, heredocs or subshells.
+            Compound commands are blocked by the permission system.
+          claude_args: |
+            --max-turns 80
+            ${{ (vars.AGENT_QA_MODEL || vars.AGENT_MODEL) && format('--model {0}', vars.AGENT_QA_MODEL || vars.AGENT_MODEL) || '' }}
+            --mcp-config ${{ github.workspace }}/.agent-out/mcp.json
+            --allowedTools "Read,Grep,Glob,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh pr comment:*),Bash(gh issue view:*),mcp__playwright"
+            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["pass","fail","needs-human"]},"screenshots":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"caption":{"type":"string"}},"required":["file"]}}},"required":["verdict"]}'
+
+      - name: Report denied tools
+        if: ${{ !cancelled() && steps.agent.outputs.execution_file != '' }}
+        run: |
+          denied=$(jq -r '.[] | select(.type == "result") | .permission_denials[]? | "- `\(.tool_name)`: `\(.tool_input | tostring | .[0:300])`"' \
+                   "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || true)
+          if [ -n "$denied" ]; then
+            printf '### Denied tool calls\n%s\n' "$denied" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Agent had denied tool calls, see the job summary"
+          fi
+
+      # Screenshots are committed to gh-pages (qa/pr-N/<run>/) and embedded via raw URLs,
+      # so they show up in the PR right away. pages-janitor.yml removes them AGENT_QA_SCREENSHOT_DAYS (default 7) after the PR closes.
+      - name: Publish screenshots
+        if: ${{ !cancelled() && steps.agent.outcome != 'skipped' && env.SCREENSHOTS == 'pages' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          OUT: ${{ steps.agent.outputs.structured_output }}
+          KEEP_DAYS: ${{ vars.AGENT_QA_SCREENSHOT_DAYS || '7' }}
+        run: |
+          shopt -s nullglob
+          files=(.agent-out/screenshots/*.png .agent-out/screenshots/*.jpeg .agent-out/screenshots/*.jpg)
+          [ ${#files[@]} -eq 0 ] && { echo "No screenshots"; exit 0; }
+          dir="qa/pr-$PR/$GITHUB_RUN_ID"
+          mkdir -p .agent-out/publish && cp "${files[@]}" .agent-out/publish/
+          "$BIN/publish-pages.sh" .agent-out/publish "$dir" "qa: screenshots for PR #$PR"
+          base="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/gh-pages/$dir"
+          {
+            echo "<!-- agent:qa-screenshots -->"
+            echo "### 📸 QA screenshots (round ${{ steps.guard.outputs.round }})"
+            for f in "${files[@]}"; do
+              name=$(basename "$f")
+              caption=$(echo "${OUT:-null}" | jq -r --arg n "$name" '[.screenshots[]? | select(.file | endswith($n)) | .caption][0] // $n')
+              printf '\n**%s**\n\n![%s](%s/%s)\n' "$caption" "$name" "$base" "$name"
+            done
+            printf '\n_Screenshots are kept for %s days after this PR closes (full set in the run artifacts for 14 days)._\n' "$KEEP_DAYS"
+          } > .agent-out/gallery.md
+          gh pr comment "$PR" --body-file .agent-out/gallery.md
+
+      - uses: actions/upload-artifact@v4
+        id: artifact
+        if: ${{ !cancelled() && steps.agent.outcome != 'skipped' }}
+        with:
+          name: qa-pr-${{ github.event.pull_request.number }}-round-${{ steps.guard.outputs.round }}
+          path: |
+            .agent-out/screenshots/
+            .agent-out/e2e-results.txt
+            playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # AGENT_QA_SCREENSHOTS=artifact (default for private repositories): the PR gets the captions and a
+      # link to the run's artifact instead of inline images.
+      - name: Link screenshots
+        if: ${{ !cancelled() && steps.agent.outcome != 'skipped' && env.SCREENSHOTS == 'artifact' && steps.artifact.outputs.artifact-url != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          OUT: ${{ steps.agent.outputs.structured_output }}
+          LINK: ${{ steps.artifact.outputs.artifact-url }}
+        run: |
+          shopt -s nullglob
+          files=(.agent-out/screenshots/*.png .agent-out/screenshots/*.jpeg .agent-out/screenshots/*.jpg)
+          [ ${#files[@]} -eq 0 ] && { echo "No screenshots"; exit 0; }
+          {
+            echo "<!-- agent:qa-screenshots -->"
+            echo "### 📸 QA screenshots (round ${{ steps.guard.outputs.round }})"
+            printf '\n%s screenshots are in the [run artifact](%s) (kept 14 days):\n\n' "${#files[@]}" "$LINK"
+            for f in "${files[@]}"; do
+              name=$(basename "$f")
+              caption=$(echo "${OUT:-null}" | jq -r --arg n "$name" '[.screenshots[]? | select(.file | endswith($n)) | .caption][0] // $n')
+              printf -- '- `%s`: %s\n' "$name" "$caption"
+            done
+          } > .agent-out/gallery.md
+          gh pr comment "$PR" --body-file .agent-out/gallery.md
+
+      - name: Apply state transition
+        if: ${{ !cancelled() && steps.guard.outputs.stop != 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          OUT: ${{ steps.agent.outputs.structured_output }}
+          READY: ${{ steps.preview.outputs.ready || steps.local.outputs.ready }}
+          CI_RESULT: ${{ steps.ci.outputs.result }}
+          CI_FAILED: ${{ steps.ci.outputs.failed }}
+          URL: ${{ steps.preview.outputs.url || steps.guard.outputs.url }}
+        run: |
+          if [ "$CI_RESULT" = "fail" ]; then
+            stale=$("$BIN/pr-still-current.sh" "$PR" "$HEAD_SHA" agent:qa)
+            if [ -n "$stale" ]; then echo "CI failed, but ${stale#skip=}" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; fi
+            "$BIN/transition.sh" "$PR" agent:changes-requested
+            gh pr comment "$PR" --body "<!-- agent:merge -->
+          ❌ Required checks failed on \`${HEAD_SHA:0:7}\`: $CI_FAILED. QA was skipped, since this commit can't merge. Implementor: open the failing check, reproduce it locally, fix it, and run all checks again before pushing."
+            "$BIN/progress.sh" --pr "$PR" "🧪 **QA**: skipped, required checks failed on #$PR, back to the Implementor"
+            exit 0
+          fi
+          if [ "$READY" != "true" ]; then
+            "$BIN/transition.sh" "$PR" agent:needs-decision
+            if [ "$LOCAL" = true ]; then
+              gh pr comment "$PR" --body "⚠️ QA could not start: the app never answered at $URL on the runner (\`AGENT_QA_START_COMMAND\`, see the [run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Handing to the Lead."
+            else
+              gh pr comment "$PR" --body "⚠️ QA could not start: the preview at $URL never served commit \`${HEAD_SHA:0:7}\`. Check the Preview workflow. Handing to the Lead."
+            fi
+            exit 0
+          fi
+          verdict=$(echo "${OUT:-null}" | jq -r '.verdict // "error"')
+          if [ "$("$BIN/count-comments.sh" "$PR" qa)" -le "${{ steps.guard.outputs.total }}" ]; then
+            echo "::warning::QA returned '$verdict' but posted no report"
+            verdict=missing-comment
+          fi
+          # The PR may have changed while the agent worked (new commits, a conflict flagged by the merge
+          # gate, a Lead decision). Never apply a verdict on top of that.
+          stale=$("$BIN/pr-still-current.sh" "$PR" "$HEAD_SHA" agent:qa)
+          if [ -n "$stale" ]; then
+            echo "Verdict '$verdict' not applied: ${stale#skip=}" | tee -a "$GITHUB_STEP_SUMMARY"
+            "$BIN/progress.sh" --pr "$PR" "🧪 **QA** (round ${{ steps.guard.outputs.round }}): verdict not applied, ${stale#skip=}"
+            exit 0
+          fi
+          case "$verdict" in
+            pass)        "$BIN/approve.sh" "$PR" "$HEAD_SHA" qa ;;
+            fail)        "$BIN/transition.sh" "$PR" agent:changes-requested ;;
+            needs-human) "$BIN/transition.sh" "$PR" agent:needs-decision ;;
+            *)           "$BIN/transition.sh" "$PR" agent:needs-decision
+                         gh pr comment "$PR" --body "⚠️ QA agent failed ([run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Handing to the Lead." ;;
+          esac
+          case "${{ steps.e2e.outputs.exit }}" in 0) e2e="e2e green" ;; none) e2e="no e2e suite" ;; *) e2e="e2e failing" ;; esac
+          case "$verdict" in
+            pass) msg="passed · $e2e · screenshots on #$PR" ;;
+            fail) msg="found defects · $e2e · details and screenshots on #$PR" ;;
+            *)    msg="could not decide, handed to the Lead" ;;
+          esac
+          "$BIN/progress.sh" --pr "$PR" "🧪 **QA** (round ${{ steps.guard.outputs.round }}): $msg"

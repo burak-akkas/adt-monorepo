@@ -1,0 +1,46 @@
+name: "Agent · Chat (@claude)"
+
+# Human override and ad-hoc help: mention @claude in any issue or PR comment or review.
+# Bots cannot trigger this workflow, so agents can't start chat loops.
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  chat:
+    # AGENT_PAUSED == 'true' stops every agent job (global pause switch).
+    if: >-
+      ${{ vars.AGENT_PAUSED != 'true' && (
+        contains(github.event.comment.body || github.event.review.body, '@claude') && (github.event.comment.user.type || github.event.review.user.type) != 'Bot' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association)
+      ) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ vars.AGENT_APP_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          token: ${{ steps.app.outputs.token }}
+
+      - uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app.outputs.token }}
+          branch_prefix: "agent/"
+          claude_args: |
+            --max-turns 40
+            ${{ vars.AGENT_MODEL && format('--model {0}', vars.AGENT_MODEL) || '' }}

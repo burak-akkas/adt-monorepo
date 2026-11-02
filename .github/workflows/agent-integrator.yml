@@ -1,0 +1,118 @@
+name: "Agent · Integrator"
+
+# The merge queue. The merge gate (agent-merge.yml) labels approved PRs `agent:queued`; this workflow
+# merges them one at a time, oldest first (scripts/agents/queue.sh). For each PR (scripts/agents/integrate.sh):
+#   1. It must still be the approved commit, or GitHub's clean merge of the base on top of it
+#   2. If the base moved on, update-branch merges it in (the PR's own changes stay as approved, so no
+#      re-review; with AGENT_QA_ON_BASE_UPDATE the queue waits while QA tests the combined code)
+#   3. Waits for the required checks (AGENT_REQUIRED_CHECKS) on exactly that commit
+#   4. With QA on (AGENT_QA) and AGENT_QA_STAGE unset or `queue`: QA tests exactly that commit while the
+#      queue waits, once per PR (a PR whose own changes QA already passed isn't tested again)
+#   5. Squash-merges exactly that commit, if the base hasn't moved meanwhile (else back to 2)
+# Conflicts and red checks go to the Implementor, timeouts and failed merges to the back of the queue,
+# and after AGENT_INTEGRATOR_MAX_ATTEMPTS failed attempts (default 3) the Lead decides.
+#
+# Why a queue: when every approved PR raced to merge on its own, each merge made every other approved
+# PR update and retest (O(N²) CI, review and QA runs for N parallel PRs), and two PRs whose checks
+# finished together could both merge without being tested together. In the queue each PR is updated
+# and tested once, right before it merges, and nothing else merges meanwhile.
+#
+# Every run drains the whole queue, so it doesn't matter that GitHub keeps only one pending run in the
+# concurrency group: whichever run is next handles every queued PR. A run hands the rest of the queue to
+# a fresh run after AGENT_INTEGRATOR_DRAIN_MINUTES (default 100), by re-applying `agent:queued` (that
+# keeps the PR's place). If no run is active while PRs wait, the watchdog does the same.
+on:
+  pull_request_target:
+    types: [labeled]
+  workflow_dispatch:
+
+env:
+  AGENT_ESCALATION_ASSIGNEE: ${{ vars.AGENT_ESCALATION_ASSIGNEE }}
+  AGENT_BOT_ID: ${{ vars.AGENT_BOT_ID }}   # the App's bot user id: unlike its login, it survives renames
+  AGENT_AVOID_CONFLICTS: ${{ vars.AGENT_AVOID_CONFLICTS }}           # conflict avoidance (overlap.sh, release-waiting.sh)
+  AGENT_CONFLICT_IGNORE: ${{ vars.AGENT_CONFLICT_IGNORE }}
+  AGENT_CONFLICT_WAIT_MINUTES: ${{ vars.AGENT_CONFLICT_WAIT_MINUTES }}
+  AGENT_PREVIEW_URL: ${{ vars.AGENT_PREVIEW_URL }}         # link templates (scripts/agents/url.sh)
+  AGENT_PRODUCTION_URL: ${{ vars.AGENT_PRODUCTION_URL }}
+
+jobs:
+  integrate:
+    # AGENT_PAUSED == 'true' stops every agent job (global pause switch). AGENT_AUTO_MERGE is the merge kill switch.
+    if: >-
+      ${{ vars.AGENT_PAUSED != 'true' && vars.AGENT_AUTO_MERGE == 'true' && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event.label.name == 'agent:queued' && github.event.pull_request.head.repo.full_name == github.repository)
+      ) }}
+    # One queue for the repository: one run at a time. Job-level, so skipped runs (other labels) never enter it.
+    concurrency:
+      group: agent-integrator
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    # The drain budget (100) plus one PR at worst: checks (30) and QA at the front (60), more if the base moves.
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    env:
+      BIN: .agent-trusted/scripts/agents
+      AGENT_REQUIRED_CHECKS: ${{ vars.AGENT_REQUIRED_CHECKS || 'CI' }}
+      # QA once, at the front of the queue (default), or before the queue (AGENT_QA_STAGE == 'review').
+      AGENT_QA_IN_QUEUE: ${{ vars.AGENT_QA == 'true' && vars.AGENT_QA_STAGE != 'review' && 'true' || '' }}
+      AGENT_QA_PATHS: ${{ vars.AGENT_QA_PATHS }}
+      AGENT_QA_ON_BASE_UPDATE: ${{ vars.AGENT_QA == 'true' && vars.AGENT_QA_STAGE == 'review' && vars.AGENT_QA_ON_BASE_UPDATE == 'true' && 'true' || '' }}
+      AGENT_INTEGRATOR_MAX_ATTEMPTS: ${{ vars.AGENT_INTEGRATOR_MAX_ATTEMPTS || '3' }}
+      AGENT_INTEGRATOR_CHECKS_MINUTES: ${{ vars.AGENT_INTEGRATOR_CHECKS_MINUTES || '30' }}
+      AGENT_INTEGRATOR_QA_MINUTES: ${{ vars.AGENT_INTEGRATOR_QA_MINUTES || '60' }}
+      DRAIN_MINUTES: ${{ vars.AGENT_INTEGRATOR_DRAIN_MINUTES || '100' }}
+      AGENT_AUTO_MERGE_HIGH_RISK: ${{ vars.AGENT_AUTO_MERGE_HIGH_RISK }}
+      AGENT_PROTECTED_PATHS: ${{ vars.AGENT_PROTECTED_PATHS || '.github/,scripts/,templates/' }}
+      AGENT_MERGE_METHOD: ${{ vars.AGENT_MERGE_METHOD || 'squash' }}
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ vars.AGENT_APP_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
+      # Scripts always come from the default branch, never from a PR.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .agent-trusted
+          sparse-checkout: scripts/agents
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Merge the queue, one PR at a time
+        env:
+          # The App token, so labels and merges trigger the other workflows (Reviewer, deploy). It
+          # expires after an hour; app-token.sh renews it from the App's key during long runs.
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          AGENT_APP_ID: ${{ vars.AGENT_APP_ID }}
+          AGENT_APP_PRIVATE_KEY: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+          AGENT_TOKEN_CACHE: ${{ runner.temp }}/agent-app-token
+        run: |
+          if [ -n "${AGENT_TOKEN_CACHE:-}" ]; then (umask 077; printf '%s %s\n' "$(date +%s)" "$GH_TOKEN" > "$AGENT_TOKEN_CACHE"); fi
+          start=$(date +%s)
+          seen=" "
+          echo "### 🚦 Merge queue" >> "$GITHUB_STEP_SUMMARY"
+          # Queue labels left on PRs that are no longer open (e.g. a run killed right after a merge).
+          "$BIN/queue-tidy.sh" >> "$GITHUB_STEP_SUMMARY"
+          while :; do
+            queue=$("$BIN/queue.sh")
+            # Each PR once per run: a PR sent to the back of the queue is picked up by the next run.
+            next=$(echo "$queue" | awk -v seen="$seen" 'NF && index(seen, " " $1 " ") == 0 { print $1; exit }')
+            if [ -z "$next" ]; then
+              echo "Queue is empty$([ -n "$queue" ] && echo " (the rest is for the next run: $(echo "$queue" | awk '{print "#" $1}' | xargs))")." >> "$GITHUB_STEP_SUMMARY"
+              break
+            fi
+            if [ $(( $(date +%s) - start )) -ge $(( DRAIN_MINUTES * 60 )) ]; then
+              # Re-applying the label starts a fresh run (it queues behind this one) and keeps #$next's place.
+              "$BIN/transition.sh" "$next" agent:queued
+              echo "Time budget used, handed #$next and the rest of the queue to a fresh run." >> "$GITHUB_STEP_SUMMARY"
+              break
+            fi
+            seen="$seen$next "
+            if token=$("$BIN/app-token.sh"); then export GH_TOKEN="$token"; fi
+            echo "Queue: $(echo "$queue" | awk '{print "#" $1 " (" $2 ")"}' | xargs)"
+            result=$("$BIN/integrate.sh" "$next" | tail -1) || result="result=error"
+            echo "- #$next: ${result#result=}" >> "$GITHUB_STEP_SUMMARY"
+          done

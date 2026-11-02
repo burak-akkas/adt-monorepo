@@ -1,0 +1,29 @@
+name: API CI
+
+on:
+  pull_request:
+    paths: ["apps/api/**", "packages/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck -w packages/contracts
+      - run: npm run typecheck -w apps/api
+      - run: npm test -w apps/api
+      - run: npm run build -w apps/api
+      # Migrations apply to an empty database, and the schema has no change without a migration.
+      - run: docker compose up -d --wait db
+      - run: npm run db:migrate:deploy -w apps/api
+      - run: npm run db:check-drift -w apps/api
