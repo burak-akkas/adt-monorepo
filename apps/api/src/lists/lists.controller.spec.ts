@@ -31,6 +31,7 @@ describe("lists over HTTP", () => {
     get: (path: string) => request(app.getHttpServer()).get(path).set("Cookie", cookie),
     post: (path: string, body: object = {}) => request(app.getHttpServer()).post(path).set("Cookie", cookie).send(body),
     patch: (path: string, body: object) => request(app.getHttpServer()).patch(path).set("Cookie", cookie).send(body),
+    put: (path: string, body: object) => request(app.getHttpServer()).put(path).set("Cookie", cookie).send(body),
     delete: (path: string) => request(app.getHttpServer()).delete(path).set("Cookie", cookie),
   });
   const newBoard = async (cookie: string, name: string) => (await as(cookie).post("/boards", { name }).expect(201)).body.id as string;
@@ -56,6 +57,41 @@ describe("lists over HTTP", () => {
     await server().patch("/lists/abc").send({ name: "x" }).expect(401);
     await server().post("/lists/abc/move").send({ position: 0 }).expect(401);
     await server().delete("/lists/abc").expect(401);
+    await server().put("/lists/abc/wip-limit").send({ limit: 1 }).expect(401);
+  });
+
+  it("sets, validates and clears a WIP limit", async () => {
+    const a = as(cookieA);
+    const boardId = await newBoard(cookieA, "Limits");
+    const list = (await a.post(`/boards/${boardId}/lists`, { name: "L" }).expect(201)).body;
+    for (const limit of [1, 99]) {
+      const res = await a.put(`/lists/${list.id}/wip-limit`, { limit }).expect(200);
+      expect(listResponseSchema.parse(res.body)).toMatchObject({ wipLimit: limit });
+    }
+    for (const limit of [0, 100, 1.5, "5", undefined]) {
+      await a.put(`/lists/${list.id}/wip-limit`, { limit }).expect(400);
+    }
+    expect((await a.put(`/lists/${list.id}/wip-limit`, { limit: null }).expect(200)).body.wipLimit).toBeNull();
+  });
+
+  it("answers 404 for another user's list WIP limit and leaves it unchanged", async () => {
+    const boardId = await newBoard(cookieA, "Limits private");
+    const list = (await as(cookieA).post(`/boards/${boardId}/lists`, { name: "L" }).expect(201)).body;
+    await as(cookieA).put(`/lists/${list.id}/wip-limit`, { limit: 4 }).expect(200);
+    await as(cookieB).put(`/lists/${list.id}/wip-limit`, { limit: 1 }).expect(404);
+    const after = await as(cookieA).get(`/boards/${boardId}`).expect(200);
+    expect(after.body.lists[0].wipLimit).toBe(4);
+  });
+
+  it("returns a deleted list's last name in the board's formerLists", async () => {
+    const a = as(cookieA);
+    const boardId = await newBoard(cookieA, "Former http");
+    const one = (await a.post(`/boards/${boardId}/lists`, { name: "One" }).expect(201)).body;
+    const two = (await a.post(`/boards/${boardId}/lists`, { name: "Two" }).expect(201)).body;
+    await a.delete(`/lists/${one.id}`).expect(204);
+    const board = (await a.get(`/boards/${boardId}`).expect(200)).body;
+    expect(board.formerLists).toEqual({ [one.id]: "One" });
+    expect(board.lists.map((l: { id: string }) => l.id)).toEqual([two.id]);
   });
 
   it("adds, renames, moves and deletes lists with the right status codes", async () => {

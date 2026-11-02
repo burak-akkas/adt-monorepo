@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { listWithCardsSchema } from "./lists.js";
+import { boardSettingsSchema } from "./settings.js";
 
 export const MAX_BOARD_NAME_LENGTH = 40;
 export const DEFAULT_BOARD_NAME = "My board";
@@ -17,7 +18,12 @@ export const boardSummarySchema = z.object({
   updatedAt: z.string(),
 });
 
-export const boardDetailSchema = boardSummarySchema.extend({ lists: z.array(listWithCardsSchema) });
+export const boardDetailSchema = boardSummarySchema.extend({
+  lists: z.array(listWithCardsSchema),
+  settings: boardSettingsSchema,
+  // Last names of deleted lists, by list id.
+  formerLists: z.record(z.string(), z.string()),
+});
 
 export type CreateBoardRequest = z.infer<typeof createBoardRequestSchema>;
 export type RenameBoardRequest = z.infer<typeof renameBoardRequestSchema>;

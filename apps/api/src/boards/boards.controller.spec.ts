@@ -96,9 +96,105 @@ describe("/boards over HTTP", () => {
     expect(foreign.body).toEqual(missing.body);
     await b.patch(`/boards/${mine.id}`, { name: "Stolen" }).expect(404);
     await b.post(`/boards/${mine.id}/duplicate`).expect(404);
+    await b.patch(`/boards/${mine.id}/settings`, { view: "table" }).expect(404);
     await b.delete(`/boards/${mine.id}`).expect(404);
     expect((await as(cookieB).get("/boards")).body.map((x: { id: string }) => x.id)).not.toContain(mine.id);
     const after = await as(cookieA).get(`/boards/${mine.id}`).expect(200);
     expect(after.body.name).toBe(mine.name);
+    expect(after.body.settings.view).toBe("board");
+  });
+
+  it("returns default settings on GET and updates them with PATCH /boards/:id/settings", async () => {
+    const a = as(cookieA);
+    await request(app.getHttpServer()).patch("/boards/abc/settings").send({}).expect(401);
+    const id = (await a.post("/boards", { name: "Settings" }).expect(201)).body.id as string;
+    const list = (await a.post(`/boards/${id}/lists`, { name: "L" }).expect(201)).body;
+
+    const fresh = boardDetailSchema.parse((await a.get(`/boards/${id}`).expect(200)).body);
+    expect(fresh.settings).toEqual({
+      background: null,
+      view: "board",
+      collapsedListIds: [],
+      doingListId: null,
+      doneListId: null,
+    });
+    expect(fresh.formerLists).toEqual({});
+
+    const res = await a
+      .patch(`/boards/${id}/settings`, {
+        background: { type: "color", value: "#12abEF" },
+        view: "calendar",
+        collapsedListIds: [list.id],
+        doingListId: list.id,
+      })
+      .expect(200);
+    expect(res.body).toEqual({
+      background: { type: "color", value: "#12abEF" },
+      view: "calendar",
+      collapsedListIds: [list.id],
+      doingListId: list.id,
+      doneListId: null,
+    });
+    // Only the present keys change.
+    const image = await a.patch(`/boards/${id}/settings`, { background: { type: "image", url: "https://x.test/a.png" } }).expect(200);
+    expect(image.body).toMatchObject({ background: { type: "image", url: "https://x.test/a.png" }, view: "calendar" });
+    const cleared = await a.patch(`/boards/${id}/settings`, { background: null, collapsedListIds: [], doingListId: null }).expect(200);
+    expect(cleared.body).toEqual({ background: null, view: "calendar", collapsedListIds: [], doingListId: null, doneListId: null });
+  });
+
+  it("rejects invalid settings with 400", async () => {
+    const a = as(cookieA);
+    const id = (await a.post("/boards", { name: "Bad settings" }).expect(201)).body.id as string;
+    const otherBoard = (await a.post("/boards", { name: "Other board" }).expect(201)).body.id as string;
+    const foreignList = (await a.post(`/boards/${otherBoard}/lists`, { name: "Foreign" }).expect(201)).body;
+    const bad: object[] = [
+      { background: { type: "color", value: "red" } },
+      { background: { type: "color", value: "#fff" } },
+      { background: { type: "image", url: "ftp://x.test/a.png" } },
+      { background: { type: "image", url: "javascript:alert(1)" } },
+      { background: { type: "image", url: `https://x.test/${"a".repeat(2048)}` } },
+      { view: "kanban" },
+      { unknown: true },
+      { collapsedListIds: "nope" },
+      { collapsedListIds: [foreignList.id] },
+      { doingListId: foreignList.id },
+      { doneListId: "does-not-exist" },
+    ];
+    for (const body of bad) {
+      await a.patch(`/boards/${id}/settings`, body).expect(400);
+    }
+    const after = (await a.get(`/boards/${id}`).expect(200)).body;
+    expect(after.settings.view).toBe("board");
+  });
+
+  it("copies settings, limits and mapped insights lists when duplicating, but not former lists", async () => {
+    const a = as(cookieA);
+    const id = (await a.post("/boards", { name: "Dup settings" }).expect(201)).body.id as string;
+    const one = (await a.post(`/boards/${id}/lists`, { name: "One" }).expect(201)).body;
+    const two = (await a.post(`/boards/${id}/lists`, { name: "Two" }).expect(201)).body;
+    const gone = (await a.post(`/boards/${id}/lists`, { name: "Gone" }).expect(201)).body;
+    await request(app.getHttpServer()).put(`/lists/${two.id}/wip-limit`).set("Cookie", cookieA).send({ limit: 7 }).expect(200);
+    await a.patch(`/boards/${id}/settings`, {
+      background: { type: "color", value: "#aabbcc" },
+      view: "table",
+      collapsedListIds: [one.id],
+      doingListId: one.id,
+      doneListId: two.id,
+    }).expect(200);
+    await a.delete(`/lists/${gone.id}`).expect(204);
+
+    const copyId = (await a.post(`/boards/${id}/duplicate`).expect(201)).body.id as string;
+    const copy = boardDetailSchema.parse((await a.get(`/boards/${copyId}`).expect(200)).body);
+    const [c1, c2] = copy.lists;
+    expect(c1.id).not.toBe(one.id);
+    expect(copy.lists.map((l) => [l.name, l.wipLimit, l.collapsed])).toEqual([["One", null, true], ["Two", 7, false]]);
+    expect(copy.settings).toEqual({
+      background: { type: "color", value: "#aabbcc" },
+      view: "table",
+      collapsedListIds: [c1.id],
+      doingListId: c1.id,
+      doneListId: c2.id,
+    });
+    expect(copy.formerLists).toEqual({});
   });
 });
