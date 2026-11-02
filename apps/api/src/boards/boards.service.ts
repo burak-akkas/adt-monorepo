@@ -7,12 +7,15 @@ import {
   type BoardDetail,
   type BoardSettings,
   type BoardSummary,
+  type ImportBoardResponse,
+  type ParsedImportBoardRequest,
   type UpdateBoardSettingsRequest,
 } from "@adt/contracts";
 import { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { archiveOrder } from "../archive/archive.service.js";
 import { cardDetails, toArchivedCard, toCard, type CardWithDetails } from "../cards/card.mapper.js";
+import { buildBoardImport, importedBoardName } from "./boards.import.js";
 import { templateOrder, toTemplate } from "../templates/templates.service.js";
 
 const boardWithContent = {
@@ -280,6 +283,50 @@ export class BoardsService {
         throw error;
       }
     }
+  }
+
+  /**
+   * Creates a whole board from a snapshot, once per (user, importKey): a repeated or concurrent import returns
+   * the board the first one made. A taken name gets a "(copy)" suffix instead of failing.
+   */
+  async importBoard(userId: string, snapshot: ParsedImportBoardRequest): Promise<ImportBoardResponse> {
+    const existing = await this.findByImportKey(userId, snapshot.importKey);
+    if (existing) return { board: await this.get(existing.id, userId), created: false };
+
+    const data = buildBoardImport(snapshot);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const id = await this.prisma.$transaction(
+          async (tx) => {
+            const boards = await tx.board.findMany({ where: { userId }, select: { name: true } });
+            const names = boards.map((b) => b.name);
+            const base = importedBoardName(snapshot.name);
+            const name = names.some((n) => n.toLowerCase() === base.toLowerCase()) ? copyBoardName(base, names) : base;
+            const board = await tx.board.create({ data: { ...data.create, userId, name, importKey: snapshot.importKey } });
+            if (data.doingListId || data.doneListId) {
+              await tx.board.update({
+                where: { id: board.id },
+                data: { doingListId: data.doingListId, doneListId: data.doneListId },
+              });
+            }
+            return board.id;
+          },
+          { timeout: 60_000, maxWait: 10_000 },
+        );
+        return { board: await this.get(id, userId), created: true };
+      } catch (error) {
+        if (!isUniqueViolation(error)) throw error;
+        // A parallel request with the same key won the race: return its board.
+        const winner = await this.findByImportKey(userId, snapshot.importKey);
+        if (winner) return { board: await this.get(winner.id, userId), created: false };
+        // Otherwise the name was taken in the meantime: pick the next free one once.
+        if (attempt > 0) throw nameTaken();
+      }
+    }
+  }
+
+  private findByImportKey(userId: string, importKey: string) {
+    return this.prisma.board.findFirst({ where: { userId, importKey }, select: { id: true } });
   }
 
   async remove(id: string, userId: string): Promise<void> {

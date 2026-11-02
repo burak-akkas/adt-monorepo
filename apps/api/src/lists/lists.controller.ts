@@ -4,7 +4,11 @@ import {
   deleteListQuerySchema,
   moveListRequestSchema,
   renameListRequestSchema,
+  reorderCardsRequestSchema,
   wipLimitRequestSchema,
+  type ArchivedCard,
+  type CardResponse,
+  type ReorderCardsRequest,
   type CreateListRequest,
   type DeleteListQuery,
   type ListResponse,
@@ -56,6 +60,21 @@ export class ListsController {
     @Body(new ZodValidationPipe(wipLimitRequestSchema)) body: WipLimitRequest,
   ): Promise<ListResponse> {
     return this.lists.setWipLimit(id, userId, body.limit);
+  }
+
+  @Put("lists/:id/cards/order")
+  reorderCards(
+    @UserId() userId: string,
+    @Param("id") id: string,
+    @Body(new ZodValidationPipe(reorderCardsRequestSchema)) body: ReorderCardsRequest,
+  ): Promise<CardResponse[]> {
+    return this.lists.reorderCards(id, userId, body.cardIds);
+  }
+
+  @Post("lists/:id/archive")
+  @HttpCode(200)
+  archiveCards(@UserId() userId: string, @Param("id") id: string): Promise<ArchivedCard[]> {
+    return this.lists.archiveCards(id, userId);
   }
 
   @Delete("lists/:id")

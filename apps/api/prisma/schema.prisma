@@ -116,7 +116,11 @@ model Board {
   formerLists        BoardFormerList[]
   templates          CardTemplate[]
   archivedCards      Card[]
+  // Set only by POST /boards/import. A client-chosen key makes a repeated import return the same board.
+  // NULLs are distinct in Postgres, so boards without a key never collide.
+  importKey          String?
 
+  @@unique([userId, importKey])
   @@index([userId])
   @@map("board")
 }

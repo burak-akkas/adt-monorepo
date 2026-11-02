@@ -1,6 +1,10 @@
-import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Res, UseGuards } from "@nestjs/common";
+import type { Response } from "express";
 import {
   createBoardRequestSchema,
+  importBoardRequestSchema,
+  type ImportBoardResponse,
+  type ParsedImportBoardRequest,
   renameBoardRequestSchema,
   updateBoardSettingsRequestSchema,
   type BoardDetail,
@@ -30,6 +34,18 @@ export class BoardsController {
     @Body(new ZodValidationPipe(createBoardRequestSchema)) body: CreateBoardRequest,
   ): Promise<BoardSummary> {
     return this.boards.create(userId, body.name);
+  }
+
+  /** 201 when the board was created, 200 when the importKey had been used already (the existing board is returned). */
+  @Post("import")
+  async importBoard(
+    @UserId() userId: string,
+    @Body(new ZodValidationPipe(importBoardRequestSchema)) body: ParsedImportBoardRequest,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<ImportBoardResponse> {
+    const result = await this.boards.importBoard(userId, body);
+    res.status(result.created ? 201 : 200);
+    return result;
   }
 
   @Get(":id")

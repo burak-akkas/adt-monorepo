@@ -122,6 +122,73 @@ describe("lists over HTTP", () => {
     await a.post(`/lists/${list.id}/move`, { position: 1.5 }).expect(400);
   });
 
+  describe("bulk card endpoints", () => {
+    const setup = async (name: string) => {
+      const a = as(cookieA);
+      const boardId = await newBoard(cookieA, name);
+      const list = (await a.post(`/boards/${boardId}/lists`, { name: "L" }).expect(201)).body;
+      const other = (await a.post(`/boards/${boardId}/lists`, { name: "Other" }).expect(201)).body;
+      const card = async (listId: string, title: string) =>
+        (await a.post(`/lists/${listId}/cards`, { title }).expect(201)).body as { id: string; title: string };
+      return { a, boardId, list, other, card };
+    };
+
+    it("PUT /lists/:id/cards/order sets the order and returns the cards", async () => {
+      const { a, list, card } = await setup("Reorder");
+      const [c1, c2, c3] = [await card(list.id, "b"), await card(list.id, "a"), await card(list.id, "c")];
+      const res = await a.put(`/lists/${list.id}/cards/order`, { cardIds: [c2.id, c3.id, c1.id] }).expect(200);
+      expect(res.body.map((c: { title: string; position: number }) => [c.title, c.position])).toEqual([["a", 0], ["c", 1], ["b", 2]]);
+      const board = (await a.get(`/boards/${list.boardId}`).expect(200)).body;
+      expect(board.lists[0].cards.map((c: { id: string }) => c.id)).toEqual([c2.id, c3.id, c1.id]);
+    });
+
+    it("rejects an order that is not exactly the list's cards, and changes nothing", async () => {
+      const { a, list, other, card } = await setup("Reorder bad");
+      const c1 = await card(list.id, "one");
+      const c2 = await card(list.id, "two");
+      const foreign = await card(other.id, "elsewhere");
+      for (const cardIds of [[c1.id], [c1.id, c2.id, c2.id], [c1.id, foreign.id], [c1.id, c2.id, foreign.id], [c1.id, "nope"]]) {
+        await a.put(`/lists/${list.id}/cards/order`, { cardIds }).expect(400);
+      }
+      await a.put(`/lists/${list.id}/cards/order`, {}).expect(400);
+      const board = (await a.get(`/boards/${list.boardId}`).expect(200)).body;
+      expect(board.lists[0].cards.map((c: { id: string }) => c.id)).toEqual([c1.id, c2.id]);
+      expect(board.lists[1].cards.map((c: { id: string }) => c.id)).toEqual([foreign.id]);
+    });
+
+    it("POST /lists/:id/archive archives only that list's cards, in list order", async () => {
+      const { a, list, other, card } = await setup("Archive list");
+      const c1 = await card(list.id, "first");
+      const c2 = await card(list.id, "second");
+      const kept = await card(other.id, "kept");
+      const res = await a.post(`/lists/${list.id}/archive`).expect(200);
+      expect(res.body.map((c: { id: string }) => c.id)).toEqual([c1.id, c2.id]);
+      const board = (await a.get(`/boards/${list.boardId}`).expect(200)).body;
+      expect(board.lists[0].cards).toEqual([]);
+      expect(board.lists[1].cards.map((c: { id: string }) => c.id)).toEqual([kept.id]);
+      expect(board.archive.map((c: { id: string }) => c.id)).toEqual([c1.id, c2.id]);
+      expect((await a.post(`/lists/${list.id}/archive`).expect(200)).body).toEqual([]);
+    });
+
+    it("gives another user the same 404 as for a missing list, and changes nothing", async () => {
+      const { a, list, card } = await setup("Bulk foreign");
+      const c1 = await card(list.id, "mine");
+      const b = as(cookieB);
+      await b.put(`/lists/${list.id}/cards/order`, { cardIds: [c1.id] }).expect(404);
+      await b.post(`/lists/${list.id}/archive`).expect(404);
+      await b.put("/lists/does-not-exist/cards/order", { cardIds: [] }).expect(404);
+      await b.post("/lists/does-not-exist/archive").expect(404);
+      const board = (await a.get(`/boards/${list.boardId}`).expect(200)).body;
+      expect(board.lists[0].cards.map((c: { id: string }) => c.id)).toEqual([c1.id]);
+      expect(board.archive).toEqual([]);
+    });
+
+    it("answers 401 without a session", async () => {
+      await request(app.getHttpServer()).put("/lists/abc/cards/order").send({ cardIds: [] }).expect(401);
+      await request(app.getHttpServer()).post("/lists/abc/archive").expect(401);
+    });
+  });
+
   it("gives another user's board and list the same 404 as a missing one", async () => {
     const boardId = await newBoard(cookieA, "Foreign");
     const list = (await as(cookieA).post(`/boards/${boardId}/lists`, { name: "Mine" }).expect(201)).body;
