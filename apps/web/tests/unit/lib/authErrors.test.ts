@@ -10,6 +10,7 @@ import {
   WRONG_PASSWORD_ERROR,
   accountErrorMessage,
   authErrorMessage,
+  rateLimitMessage,
   validateAuthForm,
   validateChangePasswordForm,
   validateDeleteAccountForm,
@@ -79,6 +80,17 @@ describe("authErrorMessage", () => {
     expect(a).toBe(INVALID_LOGIN_ERROR);
     expect(b).toBe(a);
     expect(c).toBe(a);
+  });
+
+  it("shows the rate limit message for a 429 in both modes, using the wait when given", () => {
+    for (const mode of ["login", "register"] as const) {
+      expect(authErrorMessage(mode, { status: 429 })).toBe("Too many attempts, try again in a minute.");
+      expect(authErrorMessage(mode, { status: 429 }, "30")).toBe("Too many attempts, try again in 30 seconds.");
+    }
+    expect(rateLimitMessage("1")).toBe("Too many attempts, try again in 1 second.");
+    expect(rateLimitMessage("0")).toBe("Too many attempts, try again in a minute.");
+    expect(rateLimitMessage("soon")).toBe("Too many attempts, try again in a minute.");
+    expect(rateLimitMessage(null)).toBe("Too many attempts, try again in a minute.");
   });
 
   it("falls back to a generic message for server errors", () => {

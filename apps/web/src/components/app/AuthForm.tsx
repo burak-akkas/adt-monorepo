@@ -28,11 +28,17 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
     setSubmitting(true);
     try {
       const trimmed = email.trim().toLowerCase();
+      let retryAfter: string | null = null;
+      const fetchOptions = {
+        onError: (ctx: { response: Response }) => {
+          retryAfter = ctx.response.headers.get("x-retry-after") ?? ctx.response.headers.get("retry-after");
+        },
+      };
       const { error: apiError } = isRegister
-        ? await authClient.signUp.email({ email: trimmed, password, name: trimmed })
-        : await authClient.signIn.email({ email: trimmed, password });
+        ? await authClient.signUp.email({ email: trimmed, password, name: trimmed }, fetchOptions)
+        : await authClient.signIn.email({ email: trimmed, password }, fetchOptions);
       if (apiError) {
-        setError(authErrorMessage(mode, apiError));
+        setError(authErrorMessage(mode, apiError, retryAfter));
         return;
       }
       router.push("/");
