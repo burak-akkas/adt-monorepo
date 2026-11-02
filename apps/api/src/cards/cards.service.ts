@@ -2,6 +2,7 @@ import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import type { CardResponse, CreateCardRequest, UpdateCardRequest } from "@adt/contracts";
 import type { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
+import { recordActivity, type ActivityEntryInput } from "./activity.js";
 import { cardDetails, toCard } from "./card.mapper.js";
 
 /** `YYYY-MM-DD` (already validated by the contract) as UTC midnight, for a `@db.Date` column. */
@@ -52,9 +53,9 @@ export class CardsService {
           notes: body.notes ?? null,
           position,
         },
-        include: cardDetails,
       });
-      return toCard(card);
+      await recordActivity(tx, card.id, { type: "created" });
+      return toCard(await tx.card.findFirstOrThrow({ where: { id: card.id }, include: cardDetails }));
     });
   }
 
@@ -64,14 +65,37 @@ export class CardsService {
 
   async update(id: string, userId: string, body: UpdateCardRequest): Promise<CardResponse> {
     return this.prisma.$transaction(async (tx) => {
-      await this.findOwnedCard(tx, id, userId);
+      const card = await this.findOwnedCard(tx, id, userId);
+      const entries: ActivityEntryInput[] = [];
+      if (body.title !== undefined && body.title !== card.title) {
+        entries.push({ type: "title", from: card.title, to: body.title });
+      }
+      if (body.priority !== undefined && body.priority !== card.priority) {
+        entries.push({ type: "priority", from: card.priority, to: body.priority });
+      }
+      if (body.dueDate !== undefined) {
+        const oldDue = card.dueDate ? card.dueDate.toISOString().slice(0, 10) : null;
+        if (body.dueDate !== oldDue) {
+          entries.push({ type: "dueDate", from: oldDue, to: body.dueDate });
+        }
+      }
+      if (body.notes !== undefined && (body.notes ?? "") !== (card.notes ?? "")) {
+        entries.push({ type: "description" });
+      }
+
       const data: Prisma.CardUncheckedUpdateInput = {};
       if (body.title !== undefined) data.title = body.title;
       if (body.priority !== undefined) data.priority = body.priority;
       if (body.cover !== undefined) data.cover = body.cover;
       if (body.dueDate !== undefined) data.dueDate = body.dueDate === null ? null : toDate(body.dueDate);
       if (body.notes !== undefined) data.notes = body.notes;
-      return toCard(await tx.card.update({ where: { id }, data, include: cardDetails }));
+      await tx.card.update({ where: { id }, data });
+      // Strictly increasing timestamps keep "newest first" deterministic within one request.
+      const base = Date.now();
+      for (const [index, entry] of entries.entries()) {
+        await recordActivity(tx, id, { ...entry, at: new Date(base + index) });
+      }
+      return toCard(await tx.card.findFirstOrThrow({ where: { id }, include: cardDetails }));
     });
   }
 
@@ -100,6 +124,7 @@ export class CardsService {
       if (card.listId !== listId) {
         const source = await tx.card.findMany({ where: { listId: card.listId }, orderBy: { position: "asc" } });
         await this.renumber(tx, card.listId, source);
+        await recordActivity(tx, id, { type: "moved", from: card.listId, to: listId });
       }
       return toCard(await tx.card.findFirstOrThrow({ where: { id }, include: cardDetails }));
     });

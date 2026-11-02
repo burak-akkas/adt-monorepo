@@ -114,6 +114,7 @@ model Board {
   doneListId         String?
   doneList           BoardList?        @relation("BoardDoneList", fields: [doneListId], references: [id], onDelete: SetNull)
   formerLists        BoardFormerList[]
+  templates          CardTemplate[]
 
   @@index([userId])
   @@map("board")
@@ -154,6 +155,25 @@ model BoardFormerList {
 
   @@id([boardId, listId])
   @@map("board_former_list")
+}
+
+// Case-insensitive unique name per board is a raw-SQL index in the add_card_templates migration
+// (`card_template_boardId_lower_name_key`); Prisma can't express it. Labels and checklist are texts only.
+model CardTemplate {
+  id        String      @id @default(uuid())
+  boardId   String
+  board     Board       @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  name      String
+  title     String
+  priority  Priority    @default(medium)
+  notes     String?
+  labels    String[]
+  cover     CoverColor?
+  checklist String[]
+  createdAt DateTime    @default(now())
+
+  @@index([boardId, createdAt])
+  @@map("card_template")
 }
 
 model Card {

@@ -12,10 +12,12 @@ import {
 import { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { cardDetails, toCard } from "../cards/card.mapper.js";
+import { templateOrder, toTemplate } from "../templates/templates.service.js";
 
 const boardWithContent = {
   lists: { orderBy: { position: "asc" }, include: { cards: { orderBy: { position: "asc" }, include: cardDetails } } },
   formerLists: true,
+  templates: { orderBy: templateOrder },
 } satisfies Prisma.BoardInclude;
 
 type BoardRow = Prisma.BoardGetPayload<object>;
@@ -55,6 +57,7 @@ function toDetail(board: BoardWithContent): BoardDetail {
     })),
     settings: toSettings(board, board.lists),
     formerLists: Object.fromEntries(board.formerLists.map((former) => [former.listId, former.name])),
+    templates: board.templates.map(toTemplate),
   };
 }
 
@@ -202,6 +205,18 @@ export class BoardsService {
               backgroundColor: source.backgroundColor,
               backgroundImageUrl: source.backgroundImageUrl,
               view: source.view,
+              templates: {
+                create: source.templates.map((template) => ({
+                  name: template.name,
+                  title: template.title,
+                  priority: template.priority,
+                  notes: template.notes,
+                  labels: template.labels,
+                  cover: template.cover,
+                  checklist: template.checklist,
+                  createdAt: template.createdAt,
+                })),
+              },
               lists: {
                 create: source.lists.map((list) => ({
                   name: list.name,
