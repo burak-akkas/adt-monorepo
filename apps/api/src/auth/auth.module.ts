@@ -23,6 +23,7 @@ export class AuthModule {}
 export function mountAuth(app: NestExpressApplication): void {
   const auth = app.get<Auth>(AUTH);
   app.use("/auth", toNodeHandler(auth));
-  app.useBodyParser("json");
+  // A board import carries a whole board, which is larger than the 100 kB default. Stays under Vercel's 4.5 MB cap.
+  app.useBodyParser("json", { limit: "4mb" });
   app.useBodyParser("urlencoded", { extended: true });
 }

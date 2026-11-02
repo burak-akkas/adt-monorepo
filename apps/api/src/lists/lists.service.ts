@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import type { ListResponse } from "@adt/contracts";
+import type { ArchivedCard, CardResponse, ListResponse } from "@adt/contracts";
+import { cardDetails, toArchivedCard, toCard } from "../cards/card.mapper.js";
 import { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 
@@ -104,6 +105,46 @@ export class ListsService {
       await this.renumber(tx, rest);
       const updated = await tx.boardList.findMany({ where: { boardId: list.boardId }, orderBy: { position: "asc" } });
       return updated.map(toResponse);
+    });
+  }
+
+  /** Puts the list's live cards in the given order. `cardIds` must be exactly the list's cards, each once. */
+  async reorderCards(id: string, userId: string, cardIds: string[]): Promise<CardResponse[]> {
+    return this.prisma.$transaction(async (tx) => {
+      await this.findOwnedList(tx, id, userId);
+      const cards = await tx.card.findMany({ where: { listId: id }, select: { id: true, position: true } });
+      const own = new Set(cards.map((card) => card.id));
+      if (cardIds.length !== own.size || new Set(cardIds).size !== cardIds.length || !cardIds.every((cardId) => own.has(cardId))) {
+        throw new BadRequestException("cardIds must contain every card of the list exactly once");
+      }
+      const current = new Map(cards.map((card) => [card.id, card.position]));
+      for (const [position, cardId] of cardIds.entries()) {
+        if (current.get(cardId) !== position) {
+          await tx.card.update({ where: { id: cardId }, data: { position } });
+        }
+      }
+      const ordered = await tx.card.findMany({ where: { listId: id }, orderBy: { position: "asc" }, include: cardDetails });
+      return ordered.map(toCard);
+    });
+  }
+
+  /** Archives every card of the list, in list order (oldest archived first), and returns them. */
+  async archiveCards(id: string, userId: string): Promise<ArchivedCard[]> {
+    return this.prisma.$transaction(async (tx) => {
+      const list = await this.findOwnedList(tx, id, userId);
+      const cards = await tx.card.findMany({ where: { listId: id }, orderBy: { position: "asc" }, select: { id: true } });
+      if (cards.length === 0) return [];
+      // Strictly increasing timestamps keep "oldest first" in list order.
+      const base = Date.now();
+      for (const [index, card] of cards.entries()) {
+        await tx.card.update({
+          where: { id: card.id },
+          data: { listId: null, boardId: list.boardId, archivedAt: new Date(base + index), position: 0 },
+        });
+      }
+      const archived = await tx.card.findMany({ where: { id: { in: cards.map((card) => card.id) } }, include: cardDetails });
+      const order = new Map(cards.map((card, index) => [card.id, index]));
+      return archived.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)).map(toArchivedCard);
     });
   }
 

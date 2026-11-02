@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Test } from "@nestjs/testing";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { boardDetailSchema, boardSummarySchema } from "@adt/contracts";
@@ -57,6 +58,153 @@ describe("/boards over HTTP", () => {
     await server().patch("/boards/abc").send({ name: "x" }).expect(401);
     await server().post("/boards/abc/duplicate").expect(401);
     await server().delete("/boards/abc").expect(401);
+    await server().post("/boards/import").send({}).expect(401);
+  });
+
+  describe("POST /boards/import", () => {
+    const AT = "2026-01-02T03:04:05.000Z";
+    const snapshot = (importKey: string, name: string) => ({
+      importKey,
+      name,
+      lists: [
+        {
+          id: "client-todo",
+          name: "To do",
+          wipLimit: 4,
+          collapsed: true,
+          cards: [
+            {
+              title: "First",
+              priority: "high",
+              cover: "teal",
+              dueDate: "2026-05-06",
+              notes: "Some notes",
+              createdAt: AT,
+              checklist: [{ text: "one", done: true }, { text: "two", done: false }],
+              comments: [{ text: "hello", createdAt: AT, editedAt: AT }],
+              labels: ["bug", "ui"],
+              activity: [
+                { type: "created", at: AT },
+                { type: "moved", at: AT, from: "client-gone", to: "client-todo" },
+              ],
+            },
+            { title: "Second" },
+          ],
+        },
+        { id: "client-done", name: "Done" },
+      ],
+      archive: [{ title: "Archived", archivedAt: AT, labels: ["old"] }],
+      templates: [{ name: "Bug", title: "Bug: ", priority: "high", labels: ["bug"], checklist: ["repro"] }],
+      formerLists: { "client-gone": "Backlog" },
+      settings: { background: { type: "color", value: "#112233" }, view: "table", doingListId: "client-todo", doneListId: "client-done" },
+    });
+    const newKey = () => randomUUID();
+    // Their own users, so the boards made here don't change what the other tests in this file see.
+    let cookieA: string;
+    let cookieB: string;
+    beforeAll(async () => {
+      cookieA = await signUp("imp-a");
+      cookieB = await signUp("imp-b");
+    });
+
+    it("creates the whole board and returns it with 201", async () => {
+      const res = await as(cookieA).post("/boards/import", snapshot(newKey(), "Imported full")).expect(201);
+      expect(res.body.created).toBe(true);
+      const board = boardDetailSchema.parse(res.body.board);
+      expect(board.name).toBe("Imported full");
+      const [todo, done] = board.lists;
+      expect(todo).toMatchObject({ name: "To do", position: 0, wipLimit: 4, collapsed: true });
+      expect(todo.id).not.toBe("client-todo");
+      expect(todo.cards.map((c) => [c.title, c.position])).toEqual([["First", 0], ["Second", 1]]);
+      expect(todo.cards[0]).toMatchObject({
+        priority: "high",
+        cover: "teal",
+        dueDate: "2026-05-06",
+        notes: "Some notes",
+        createdAt: AT,
+        labels: ["bug", "ui"],
+      });
+      expect(todo.cards[0].checklist.map((i) => [i.text, i.done])).toEqual([["one", true], ["two", false]]);
+      expect(todo.cards[0].comments).toMatchObject([{ text: "hello", createdAt: AT, editedAt: AT }]);
+      expect(done.cards).toEqual([]);
+      expect(board.archive).toMatchObject([{ title: "Archived", archivedAt: AT, labels: ["old"], boardId: board.id }]);
+      expect(board.templates).toMatchObject([{ name: "Bug", priority: "high", labels: ["bug"], checklist: ["repro"] }]);
+      expect(board.settings).toEqual({
+        background: { type: "color", value: "#112233" },
+        view: "table",
+        collapsedListIds: [todo.id],
+        doingListId: todo.id,
+        doneListId: done.id,
+      });
+      const [formerId, formerName] = Object.entries(board.formerLists)[0];
+      expect(formerName).toBe("Backlog");
+      const moved = todo.cards[0].activity.find((a) => a.type === "moved");
+      expect(moved).toMatchObject({ from: formerId, to: todo.id });
+      // The board can be read again like any other.
+      const read = await as(cookieA).get(`/boards/${board.id}`).expect(200);
+      expect(boardDetailSchema.parse(read.body)).toEqual(board);
+    });
+
+    it("is idempotent per user: the same key returns the same board with 200 and adds nothing", async () => {
+      const key = newKey();
+      const first = await as(cookieA).post("/boards/import", snapshot(key, "Idem")).expect(201);
+      const second = await as(cookieA).post("/boards/import", snapshot(key, "Other name")).expect(200);
+      expect(second.body.created).toBe(false);
+      expect(second.body.board).toEqual(first.body.board);
+      const boards = (await as(cookieA).get("/boards")).body as { name: string }[];
+      expect(boards.filter((b) => b.name.startsWith("Idem") || b.name === "Other name")).toHaveLength(1);
+      expect(await prisma.board.count({ where: { importKey: key } })).toBe(1);
+    });
+
+    it("creates one board for parallel requests with the same key", async () => {
+      const key = newKey();
+      const results = await Promise.all(
+        Array.from({ length: 5 }, () => as(cookieA).post("/boards/import", snapshot(key, "Parallel"))),
+      );
+      expect(results.map((r) => r.status).sort()).toEqual([200, 200, 200, 200, 201]);
+      expect(new Set(results.map((r) => r.body.board.id)).size).toBe(1);
+      expect(await prisma.board.count({ where: { importKey: key } })).toBe(1);
+    });
+
+    it("does not collide across users and never returns the other user's board", async () => {
+      const key = newKey();
+      const mine = await as(cookieA).post("/boards/import", snapshot(key, "Shared key")).expect(201);
+      const theirs = await as(cookieB).post("/boards/import", snapshot(key, "Bo's board")).expect(201);
+      expect(theirs.body.board.id).not.toBe(mine.body.board.id);
+      expect(theirs.body.board.name).toBe("Bo's board");
+      expect(JSON.stringify(theirs.body)).not.toContain(mine.body.board.id);
+      await as(cookieB).get(`/boards/${mine.body.board.id}`).expect(404);
+      expect(await prisma.board.count({ where: { importKey: key } })).toBe(2);
+    });
+
+    it("gives a taken or empty name a free one instead of failing", async () => {
+      await as(cookieA).post("/boards", { name: "Taken name" }).expect(201);
+      const taken = await as(cookieA).post("/boards/import", snapshot(newKey(), "taken NAME")).expect(201);
+      expect(taken.body.board.name).toBe("taken NAME (copy)");
+      const empty = await as(cookieA).post("/boards/import", { importKey: newKey(), name: "  ", lists: [] }).expect(201);
+      expect(empty.body.board.name.startsWith("My board")).toBe(true);
+    });
+
+    it("rejects invalid bodies with 400 and creates nothing", async () => {
+      const a = as(cookieA);
+      const ok = snapshot(newKey(), "Invalid");
+      const withCard = (card: object) => ({ ...ok, lists: [{ id: "l", name: "L", cards: [card] }] });
+      const bad: object[] = [
+        {},
+        { ...ok, importKey: "not-a-uuid" },
+        { ...ok, importKey: undefined },
+        withCard({ title: "x", dueDate: "2026-02-30" }),
+        withCard({ title: "x", priority: "urgent" }),
+        withCard({ title: "" }),
+        { ...ok, lists: [{ id: "l", name: "L", wipLimit: 0 }] },
+        { ...ok, settings: { view: "kanban" } },
+        { ...ok, archive: Array.from({ length: 2001 }, () => ({ title: "c", archivedAt: AT })) },
+      ];
+      for (const body of bad) {
+        await a.post("/boards/import", body).expect(400);
+      }
+      expect(await prisma.board.count({ where: { importKey: ok.importKey } })).toBe(0);
+    });
   });
 
   it("lists the default board, then creates, reads, renames, duplicates and deletes", async () => {

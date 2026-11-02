@@ -13,6 +13,12 @@ export const deleteListQuerySchema = z.object({ moveTo: z.string().min(1).option
 
 export const moveListRequestSchema = z.object({ position: z.number().int().min(0) });
 
+// A full permutation of the list's cards, in the new order.
+export const MAX_REORDER_CARDS = 2000;
+export const reorderCardsRequestSchema = z.object({
+  cardIds: z.array(z.string().min(1)).max(MAX_REORDER_CARDS),
+});
+
 export const listResponseSchema = z.object({
   id: z.string(),
   boardId: z.string(),
@@ -28,5 +34,6 @@ export type CreateListRequest = z.infer<typeof createListRequestSchema>;
 export type RenameListRequest = z.infer<typeof renameListRequestSchema>;
 export type DeleteListQuery = z.infer<typeof deleteListQuerySchema>;
 export type MoveListRequest = z.infer<typeof moveListRequestSchema>;
+export type ReorderCardsRequest = z.infer<typeof reorderCardsRequestSchema>;
 export type ListResponse = z.infer<typeof listResponseSchema>;
 export type ListWithCards = z.infer<typeof listWithCardsSchema>;
