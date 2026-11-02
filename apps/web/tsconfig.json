@@ -10,7 +10,7 @@
     "noEmit": true,
     "incremental": true,
     "plugins": [{ "name": "next" }],
-    "types": ["vitest/globals", "@testing-library/jest-dom", "node"],
+    "types": ["@testing-library/jest-dom", "node"],
     "paths": { "@/*": ["./src/*"] }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],

@@ -1,10 +1,22 @@
-import { ApiStatus } from "@/components/ApiStatus";
+import { BoardUrlSync } from "@/components/app/BoardUrlSync";
+import { ThemeSync } from "@/components/app/ThemeSync";
+import { TitleSync } from "@/components/app/TitleSync";
+import { TopBar } from "@/components/app/TopBar";
+import { Board } from "@/components/board/Board";
 
-export default function HomePage() {
+export default function Home() {
   return (
-    <main className="mx-auto max-w-2xl px-4 py-12">
-      <h1 className="text-3xl font-semibold">Kanban</h1>
-      <ApiStatus />
-    </main>
+    <>
+      <TopBar />
+      <BoardUrlSync />
+      <ThemeSync />
+      <TitleSync />
+      <main className="flex w-full min-w-0 flex-1 flex-col gap-8 px-4 py-6 sm:px-6">
+        <p className="text-sm text-zinc-500">
+          A small board built and maintained by an autonomous agent team. Your cards are saved in this browser.
+        </p>
+        <Board />
+      </main>
+    </>
   );
 }

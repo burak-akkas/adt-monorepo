@@ -1,1 +1,68 @@
 @import "tailwindcss";
+
+/* Design tokens: see docs/design-system.md. Every token needs a light value here and a dark one below. */
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+  --surface: var(--color-white);
+  --surface-muted: var(--color-zinc-100);
+  --surface-hover: var(--color-zinc-100);
+  --border: var(--color-zinc-200);
+  --border-field: var(--color-zinc-300);
+  --text-muted: var(--color-zinc-500);
+  --text-subtle: var(--color-zinc-600);
+  --accent: var(--color-indigo-600);
+  --accent-hover: var(--color-indigo-500);
+  --danger: var(--color-red-600);
+  --inverse: var(--color-zinc-900);
+  --on-inverse: var(--color-white);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-hover: var(--surface-hover);
+  --color-line: var(--border);
+  --color-field: var(--border-field);
+  --color-muted: var(--text-muted);
+  --color-subtle: var(--text-subtle);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-danger: var(--danger);
+  --color-inverse: var(--inverse);
+  --color-on-inverse: var(--on-inverse);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+:root {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --surface: var(--color-zinc-900);
+  --surface-muted: var(--color-zinc-800);
+  --surface-hover: var(--color-zinc-800);
+  --border: var(--color-zinc-800);
+  --border-field: var(--color-zinc-700);
+  --text-muted: var(--color-zinc-500);
+  --text-subtle: var(--color-zinc-400);
+  --accent: var(--color-indigo-600);
+  --accent-hover: var(--color-indigo-500);
+  --danger: var(--color-red-400);
+  --inverse: var(--color-zinc-100);
+  --on-inverse: var(--color-zinc-900);
+  color-scheme: dark;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}

@@ -1,11 +1,11 @@
 # Project guide for agents
 
 ## What this project is
-A Kanban board (To do / Doing / Done) with accounts: **NestJS 12 API, Next.js 16 frontend, Postgres with Prisma 7**, all TypeScript, in an npm workspaces monorepo. Production runs on Vercel and Neon. Versions may be newer than your training data: check `node_modules` before using an API you're not sure about.
+A Kanban board (To do / Doing / Done), with accounts on the way: **NestJS 12 API, Next.js 16 frontend, Postgres with Prisma 7**, all TypeScript, in an npm workspaces monorepo. Production runs on Vercel and Neon. Versions may be newer than your training data: check `node_modules` before using an API you're not sure about.
 
 ## Layout
 - `apps/api/`: the API. Modules in `src/`, schema and migrations in `prisma/`, tests next to the code as `*.spec.ts`.
-- `apps/web/`: the frontend (App Router). Pages in `src/app/`, components in `src/components/`, tests in `tests/`.
+- `apps/web/`: the frontend (App Router). Pages in `src/app/`, components in `src/components/` (grouped into `app/`, `board/`, `card/`, `panels/`, `ui/`, `views/`), hooks in `src/hooks/`, pure board logic in `src/lib/board/` (import from `@/lib/board`; functions return a new board and never mutate their input). Tests in `tests/unit/`, mirroring `src/`. Boards are still saved in the browser's `localStorage` (`src/hooks/useBoard.ts`, `src/lib/storage.ts`). Details in `docs/structure.md` and `docs/design-system.md`.
 - `packages/contracts/`: request and response shapes (zod), imported by both apps. Rebuild with `npm run build -w packages/contracts`.
 - `tests/e2e/`: Playwright tests against the running stack.
 - `tools/start-stack.sh`: builds and starts everything, as CI and QA do.
@@ -49,7 +49,7 @@ A change is done when the checks of every package it touches **and of the packag
 - **low**: changes well covered by tests that touch neither the schema nor the API.
 
 ## Testing notes for agents
-- Where data lives: Postgres. Each QA site has its own database.
+- Where data lives: boards are in the browser's `localStorage` for now, and theme and other preferences stay there. Everything on the server is in Postgres, and each QA site has its own database.
 - What counts as "other" data: other users' boards and cards. An action must never touch them.
 - Risky areas: migrations, login and sessions, anything that deletes.
 - Test accounts: none yet. When accounts exist, the seed script (`apps/api/prisma/seed.ts`) creates two, and they get listed here.
