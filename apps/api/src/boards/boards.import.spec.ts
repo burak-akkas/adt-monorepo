@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { importBoardRequestSchema, type ImportBoardRequest } from "@adt/contracts";
+import { activityTypes, importBoardRequestSchema, type ImportBoardRequest } from "@adt/contracts";
 import { buildBoardImport, importedBoardName, uniqueName } from "./boards.import.js";
 
 const KEY = "5d0f3b6e-8f3c-4c53-9a4e-0b8f6f1d2a11";
@@ -69,6 +69,30 @@ describe("buildBoardImport", () => {
       { name: "y", position: 1 },
     ]);
     expect(card.comments.create[0].text).toBe("c");
+  });
+
+  it("keeps activity entries of all 10 types", () => {
+    const result = buildBoardImport(
+      snapshot({
+        lists: [
+          {
+            id: "l1",
+            name: "To do",
+            cards: [
+              {
+                title: "Card",
+                createdAt: AT,
+                activity: activityTypes.map((type) => ({ type, at: AT })),
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const list = (result.create.lists as { create: Record<string, any>[] }).create[0];
+    const activity = list.cards.create[0].activity.create as { type: string }[];
+    expect(activityTypes).toHaveLength(10);
+    expect(activity.map((entry) => entry.type)).toEqual([...activityTypes]);
   });
 
   it("remaps list references and drops unknown ones", () => {

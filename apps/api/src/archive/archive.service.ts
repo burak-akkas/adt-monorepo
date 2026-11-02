@@ -3,6 +3,7 @@ import type { ArchivedCard, CardResponse } from "@adt/contracts";
 import type { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { insightsListIds } from "../boards/insights-lists.js";
+import { recordActivity } from "../cards/activity.js";
 import { cardDetails, toArchivedCard, toCard } from "../cards/card.mapper.js";
 
 /** Oldest first; the id breaks ties so the order is deterministic. */
@@ -47,10 +48,12 @@ export class ArchiveService {
       if (!card || !card.list || card.listId === null) {
         throw new NotFoundException("Card not found");
       }
+      const archivedAt = new Date();
       await tx.card.update({
         where: { id },
-        data: { listId: null, boardId: card.list.boardId, archivedAt: new Date(), position: 0 },
+        data: { listId: null, boardId: card.list.boardId, archivedAt, position: 0 },
       });
+      await recordActivity(tx, id, { type: "archived", at: archivedAt });
       await this.renumber(tx, card.listId);
       return toArchivedCard(await tx.card.findFirstOrThrow({ where: { id }, include: cardDetails }));
     });
@@ -67,10 +70,12 @@ export class ArchiveService {
       // Strictly increasing timestamps keep "oldest first" in list order.
       const base = Date.now();
       for (const [index, card] of cards.entries()) {
+        const archivedAt = new Date(base + index);
         await tx.card.update({
           where: { id: card.id },
-          data: { listId: null, boardId, archivedAt: new Date(base + index), position: 0 },
+          data: { listId: null, boardId, archivedAt, position: 0 },
         });
+        await recordActivity(tx, card.id, { type: "archived", at: archivedAt });
       }
       if (cards.length === 0) return [];
       const archived = await tx.card.findMany({ where: { id: { in: cards.map((card) => card.id) } }, include: cardDetails });
@@ -106,6 +111,7 @@ export class ArchiveService {
         where: { id },
         data: { listId: targetId, boardId: null, archivedAt: null, position: (last._max.position ?? -1) + 1 },
       });
+      await recordActivity(tx, id, { type: "restored" });
       return toCard(await tx.card.findFirstOrThrow({ where: { id }, include: cardDetails }));
     });
   }

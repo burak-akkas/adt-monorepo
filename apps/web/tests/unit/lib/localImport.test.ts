@@ -97,7 +97,10 @@ describe("toImportRequest", () => {
       checklist: [{ text: "step", done: true }],
       comments: [{ text: "hi", createdAt: AT, editedAt: LATER }],
       labels: ["bug"],
-      activity: [{ type: "moved", at: AT, from: "todo", to: "doing" }],
+      activity: [
+        { type: "checklistDone", at: LATER, to: "step" },
+        { type: "moved", at: AT, from: "todo", to: "doing" },
+      ],
     });
     expect(parsed.templates).toEqual([{ name: "Bug", title: "Bug:", priority: "high", labels: ["bug"], checklist: ["repro"] }]);
     expect(parsed.formerLists).toEqual({ gone: "Old list" });

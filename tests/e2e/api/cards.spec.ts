@@ -90,6 +90,49 @@ test.describe("cards API", () => {
     expect(await layout(boardId)).toEqual([[["Renamed", 0], ["Full", 1]], [["Second", 0]]]);
   });
 
+  test("archive, restore and ticking a checklist item are recorded in the card's activity", async () => {
+    const { boardId, one } = await freshBoard();
+    const card = await addCard(one, "Tracked");
+    const activityTypes = (json: { activity: { type: string }[] }) => json.activity.map((entry) => entry.type);
+
+    const withItem = await (await a.post(`api/cards/${card.id}/checklist`, { data: { text: "Step" } })).json();
+    const ticked = await a.patch(`api/cards/${card.id}/checklist/${withItem.checklist[0].id}`, { data: { done: true } });
+    expect(ticked.status()).toBe(200);
+    const tickedJson = await ticked.json();
+    expect(tickedJson.activity[0]).toMatchObject({ type: "checklistDone", to: "Step" });
+    // Un-ticking records nothing.
+    const unticked = await (
+      await a.patch(`api/cards/${card.id}/checklist/${withItem.checklist[0].id}`, { data: { done: false } })
+    ).json();
+    expect(activityTypes(unticked)).toEqual(["checklistDone", "created"]);
+
+    expect((await a.post(`api/cards/${card.id}/archive`)).status()).toBe(200);
+    const archived = await (await a.get(`api/boards/${boardId}/archive`)).json();
+    expect(activityTypes(archived[0])).toEqual(["archived", "checklistDone", "created"]);
+
+    const restored = await a.post(`api/archive/${card.id}/restore`, { data: {} });
+    expect(restored.status()).toBe(200);
+    expect(activityTypes(await restored.json())).toEqual(["restored", "archived", "checklistDone", "created"]);
+  });
+
+  test("archiving a list and the done list records one archived entry per card", async () => {
+    const { boardId, one } = await freshBoard();
+    const done = await (await a.post(`api/boards/${boardId}/lists`, { data: { name: "Done" } })).json();
+    await addCard(one, "L1");
+    await addCard(one, "L2");
+    await addCard(done.id, "D1");
+    await addCard(done.id, "D2");
+    const types = (cards: { activity: { type: string }[] }[]) => cards.map((card) => card.activity.map((e) => e.type));
+
+    const byList = await a.post(`api/lists/${one}/archive`);
+    expect(byList.status()).toBe(200);
+    expect(types(await byList.json())).toEqual([["archived", "created"], ["archived", "created"]]);
+
+    const byDone = await a.post(`api/boards/${boardId}/archive/done`);
+    expect(byDone.status()).toBe(200);
+    expect(types(await byDone.json())).toEqual([["archived", "created"], ["archived", "created"]]);
+  });
+
   test("invalid input returns 400", async () => {
     const { one } = await freshBoard();
     const card = await addCard(one, "ok");

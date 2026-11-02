@@ -8,7 +8,18 @@ export const MAX_COMMENT_LENGTH = 1000;
 export const MAX_LABEL_LENGTH = 20;
 export const MAX_ACTIVITY_ENTRIES = 50;
 
-export const activityTypes = ["created", "moved", "title", "description", "priority", "dueDate"] as const;
+export const activityTypes = [
+  "created",
+  "moved",
+  "title",
+  "description",
+  "priority",
+  "dueDate",
+  "archived",
+  "restored",
+  "checklistDone",
+  "duplicated",
+] as const;
 
 export const priorities = ["low", "medium", "high"] as const;
 export const coverColors = ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"] as const;

@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import type { ArchivedCard, CardResponse, ListResponse } from "@adt/contracts";
+import { recordActivity } from "../cards/activity.js";
 import { cardDetails, toArchivedCard, toCard } from "../cards/card.mapper.js";
 import { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
@@ -137,10 +138,12 @@ export class ListsService {
       // Strictly increasing timestamps keep "oldest first" in list order.
       const base = Date.now();
       for (const [index, card] of cards.entries()) {
+        const archivedAt = new Date(base + index);
         await tx.card.update({
           where: { id: card.id },
-          data: { listId: null, boardId: list.boardId, archivedAt: new Date(base + index), position: 0 },
+          data: { listId: null, boardId: list.boardId, archivedAt, position: 0 },
         });
+        await recordActivity(tx, card.id, { type: "archived", at: archivedAt });
       }
       const archived = await tx.card.findMany({ where: { id: { in: cards.map((card) => card.id) } }, include: cardDetails });
       const order = new Map(cards.map((card, index) => [card.id, index]));

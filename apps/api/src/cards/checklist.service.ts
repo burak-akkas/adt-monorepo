@@ -2,6 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from "@nes
 import type { CardResponse } from "@adt/contracts";
 import type { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
+import { recordActivity } from "./activity.js";
 import { cardDetails, toCard } from "./card.mapper.js";
 
 @Injectable()
@@ -18,10 +19,11 @@ export class ChecklistService {
 
   /** Loads an item only if it belongs to the given card. */
   private async assertItem(tx: Prisma.TransactionClient, cardId: string, itemId: string) {
-    const item = await tx.checklistItem.findFirst({ where: { id: itemId, cardId }, select: { id: true } });
+    const item = await tx.checklistItem.findFirst({ where: { id: itemId, cardId }, select: { id: true, text: true, done: true } });
     if (!item) {
       throw new NotFoundException("Checklist item not found");
     }
+    return item;
   }
 
   /** Rewrites positions to 0..n-1, touching only rows whose position changed. */
@@ -59,11 +61,14 @@ export class ChecklistService {
   ): Promise<CardResponse> {
     return this.prisma.$transaction(async (tx) => {
       await this.assertOwnedCard(tx, cardId, userId);
-      await this.assertItem(tx, cardId, itemId);
+      const stored = await this.assertItem(tx, cardId, itemId);
       await tx.checklistItem.update({
         where: { id: itemId },
         data: { ...(changes.text !== undefined && { text: changes.text }), ...(changes.done !== undefined && { done: changes.done }) },
       });
+      if (changes.done === true && !stored.done) {
+        await recordActivity(tx, cardId, { type: "checklistDone", to: changes.text ?? stored.text });
+      }
       return this.load(tx, cardId);
     });
   }
