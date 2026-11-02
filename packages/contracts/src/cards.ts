@@ -52,6 +52,13 @@ export const moveCardRequestSchema = z.object({
   position: z.number().int().min(0),
 });
 
+export const commentTextSchema = z.string().trim().min(1).max(MAX_COMMENT_LENGTH);
+export const labelNameSchema = z.string().trim().min(1).max(MAX_LABEL_LENGTH);
+
+export const addCommentRequestSchema = z.object({ text: commentTextSchema });
+export const editCommentRequestSchema = z.object({ text: commentTextSchema });
+export const addLabelRequestSchema = z.object({ name: labelNameSchema });
+
 export const checklistItemSchema = z.object({
   id: z.string(),
   text: z.string().max(MAX_CHECKLIST_ITEM_LENGTH),
@@ -96,6 +103,9 @@ export type CoverColor = z.infer<typeof coverColorSchema>;
 export type CreateCardRequest = z.infer<typeof createCardRequestSchema>;
 export type UpdateCardRequest = z.infer<typeof updateCardRequestSchema>;
 export type MoveCardRequest = z.infer<typeof moveCardRequestSchema>;
+export type AddCommentRequest = z.infer<typeof addCommentRequestSchema>;
+export type EditCommentRequest = z.infer<typeof editCommentRequestSchema>;
+export type AddLabelRequest = z.infer<typeof addLabelRequestSchema>;
 export type ActivityType = (typeof activityTypes)[number];
 export type ChecklistItem = z.infer<typeof checklistItemSchema>;
 export type Comment = z.infer<typeof commentSchema>;
