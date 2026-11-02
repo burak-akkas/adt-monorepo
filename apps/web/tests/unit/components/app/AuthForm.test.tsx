@@ -53,7 +53,30 @@ describe("AuthForm", () => {
     const user = await fill("A@Example.test", "test-password-123");
     await user.click(screen.getByRole("button", { name: "Register" }));
     await waitFor(() => expect(push).toHaveBeenCalledWith("/"));
-    expect(signUp).toHaveBeenCalledWith(expect.objectContaining({ email: "a@example.test" }));
+    expect(signUp).toHaveBeenCalledWith(expect.objectContaining({ email: "a@example.test" }), expect.anything());
+  });
+
+  it.each([
+    ["login", signIn, "Log in"],
+    ["register", signUp, "Register"],
+  ] as const)("announces a rate limit on %s, with the wait from X-Retry-After", async (mode, call, button) => {
+    call.mockImplementation(async (_body, options) => {
+      options.onError({ response: new Response(null, { status: 429, headers: { "X-Retry-After": "42" } }) });
+      return { error: { status: 429 } };
+    });
+    render(<AuthForm mode={mode} />);
+    const user = await fill("a@example.test", "test-password-123");
+    await user.click(screen.getByRole("button", { name: button }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Too many attempts, try again in 42 seconds.");
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("says 'in a minute' when a 429 has no wait", async () => {
+    signIn.mockResolvedValue({ error: { status: 429 } });
+    render(<AuthForm mode="login" />);
+    const user = await fill("a@example.test", "test-password-123");
+    await user.click(screen.getByRole("button", { name: "Log in" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Too many attempts, try again in a minute.");
   });
 
   it("redirects after a successful login", async () => {

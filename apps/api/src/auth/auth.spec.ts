@@ -1,11 +1,11 @@
 import { Test } from "@nestjs/testing";
 import type { NestExpressApplication } from "@nestjs/platform-express";
-import { PASSWORD_MIN_LENGTH, sessionResponseSchema } from "@adt/contracts";
+import { PASSWORD_MIN_LENGTH, VISITOR_IP_HEADER, sessionResponseSchema } from "@adt/contracts";
 import request from "supertest";
 import { AppModule } from "../app.module.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { mountAuth } from "./auth.module.js";
-import { readAuthConfig } from "./auth.js";
+import { readAuthConfig, readRateLimitConfig } from "./auth.js";
 
 // These tests run against the real local Postgres (docker compose up -d --wait db), like the e2e suite.
 process.env.DATABASE_URL ??= "postgresql://kanban:kanban@localhost:5432/kanban";
@@ -198,6 +198,104 @@ describe("Better Auth at /auth", () => {
       const res = await post("/auth/delete-user", { password: PASSWORD });
       expect(res.status).toBe(401);
     });
+  });
+});
+
+describe("rate limiting", () => {
+  let app: NestExpressApplication;
+  let prisma: PrismaService;
+  // Fresh addresses per run: the counters live in the database and outlive the test process.
+  const octet = () => Math.floor(Math.random() * 250) + 1;
+  const ip = () => `10.${octet()}.${octet()}.${octet()}`;
+
+  const signIn = (visitorIp: string | undefined, extra: Record<string, string> = {}) => {
+    const req = request(app.getHttpServer()).post("/auth/sign-in/email").set("Origin", ORIGIN);
+    return (visitorIp ? req.set(VISITOR_IP_HEADER, visitorIp) : req)
+      .set(extra)
+      .send({ email: email("nobody"), password: "wrong-password-123" });
+  };
+
+  beforeAll(async () => {
+    // vitest.config.ts relaxes the limits for the other specs; this app uses the production defaults.
+    const saved = { ...process.env };
+    process.env.AUTH_RATE_LIMIT_SIGN_IN_MAX = "5";
+    process.env.AUTH_RATE_LIMIT_MAX = "100";
+    delete process.env.AUTH_RATE_LIMIT_WINDOW_SECONDS;
+    try {
+      const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+      app = moduleRef.createNestApplication<NestExpressApplication>({ bodyParser: false });
+      mountAuth(app);
+      await app.init();
+    } finally {
+      Object.assign(process.env, saved);
+    }
+    prisma = app.get(PrismaService);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it("answers 429 with a retry hint after 5 failed sign-ins from one visitor, and leaves another visitor alone", async () => {
+    const visitor = ip();
+    const other = ip();
+    for (let i = 0; i < 5; i++) expect((await signIn(visitor)).status).toBe(401);
+
+    const blocked = await signIn(visitor);
+    expect(blocked.status).toBe(429);
+    expect(Number(blocked.headers["x-retry-after"])).toBeGreaterThan(0);
+
+    expect((await signIn(other)).status).toBe(401);
+  });
+
+  it("keeps the counters in the database under the visitor's address", async () => {
+    const visitor = ip();
+    await signIn(visitor);
+    const row = await prisma.rateLimit.findFirstOrThrow({ where: { key: `${visitor}|/sign-in/email` } });
+    expect(row.count).toBe(1);
+  });
+
+  it("limits sign-up the same way", async () => {
+    const visitor = ip();
+    const signUp = () =>
+      request(app.getHttpServer())
+        .post("/auth/sign-up/email")
+        .set("Origin", ORIGIN)
+        .set(VISITOR_IP_HEADER, visitor)
+        .send({ name: "x", email: "not-an-email", password: PASSWORD });
+    for (let i = 0; i < 5; i++) expect((await signUp()).status).toBe(400);
+    expect((await signUp()).status).toBe(429);
+  });
+
+  it("ignores forwarding headers a client sends, so it cannot pick or change its bucket", async () => {
+    const visitor = ip();
+    for (let i = 0; i < 5; i++) {
+      // A different spoofed address on every request must not give a fresh bucket.
+      await signIn(visitor, { "x-forwarded-for": ip(), "x-real-ip": ip(), "x-vercel-forwarded-for": ip() });
+    }
+    expect((await signIn(visitor, { "x-forwarded-for": ip() })).status).toBe(429);
+
+    const spoofed = ip();
+    await signIn(undefined, { "x-forwarded-for": spoofed, "x-real-ip": spoofed });
+    expect(await prisma.rateLimit.count({ where: { key: { startsWith: `${spoofed}|` } } })).toBe(0);
+  });
+});
+
+describe("rate limit configuration", () => {
+  it("has strict defaults", () => {
+    expect(readRateLimitConfig({})).toEqual({ window: 60, max: 100, signInMax: 5 });
+  });
+
+  it("reads the limits from the environment", () => {
+    expect(
+      readRateLimitConfig({ AUTH_RATE_LIMIT_WINDOW_SECONDS: "30", AUTH_RATE_LIMIT_MAX: "500", AUTH_RATE_LIMIT_SIGN_IN_MAX: "50" }),
+    ).toEqual({ window: 30, max: 500, signInMax: 50 });
+  });
+
+  it("rejects invalid or non-positive values", () => {
+    for (const value of ["0", "-1", "abc", "1.5"]) {
+      expect(() => readRateLimitConfig({ AUTH_RATE_LIMIT_SIGN_IN_MAX: value })).toThrow(/AUTH_RATE_LIMIT_SIGN_IN_MAX/);
+    }
   });
 });
 

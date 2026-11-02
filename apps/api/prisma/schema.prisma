@@ -76,6 +76,16 @@ model Verification {
   @@map("verification")
 }
 
+// Better Auth's rate limiter counters (storage: "database"), so limits hold across serverless instances.
+model RateLimit {
+  id          String @id
+  key         String @unique
+  count       Int
+  lastRequest BigInt
+
+  @@map("rateLimit")
+}
+
 enum Priority {
   low
   medium
