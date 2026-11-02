@@ -4,8 +4,11 @@ name: "Agent · Architect"
 # Records the design risk as a `risk:low|medium|high` label (the Merge gate reads it).
 # Next state: low/medium risk -> `agent:ready`. High risk or unsure -> the Lead (`agent:needs-decision`).
 # Too big for one PR -> `split`: split.sh creates sub-issues (each runs the full pipeline) and the
-# issue waits in `agent:split`; agent-subissues.yml closes it when all are done. Sub-issues never split
-# again. AGENT_SPLIT == 'false' turns splitting off; AGENT_MAX_SUBISSUES caps it (default 5).
+# issue waits in `agent:split`; agent-subissues.yml closes it when all are done. Sub-issues can split
+# once more, down to AGENT_MAX_SPLIT_DEPTH levels (default 2). AGENT_SPLIT == 'false' turns splitting
+# off; AGENT_MAX_SUBISSUES caps it (default 5).
+# Size check: a `ready` design that plans more than AGENT_MAX_PLANNED_FILES files (default 20) runs
+# again with splitting required. A split the Lead asked for works the same way (split-mode.sh).
 # Optional human gate: with AGENT_REQUIRE_DESIGN_APPROVAL == 'true', every design waits in
 # `agent:design-review` until a human applies `agent:ready`.
 on:
@@ -52,6 +55,25 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: echo "count=$(scripts/agents/count-comments.sh ${{ github.event.issue.number }} architect)" >> "$GITHUB_OUTPUT"
 
+      # allowed / required (the Lead or the size check asked for a split) / not-allowed <reason>
+      - name: Split mode
+        id: split
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          N: ${{ github.event.issue.number }}
+          AGENT_SPLIT: ${{ vars.AGENT_SPLIT }}
+          AGENT_MAX_SPLIT_DEPTH: ${{ vars.AGENT_MAX_SPLIT_DEPTH || '2' }}
+          MAX: ${{ vars.AGENT_MAX_SUBISSUES || '5' }}
+        run: |
+          mode=$(scripts/agents/split-mode.sh "$N")
+          case "$mode" in
+            allowed)  text="allowed, 2 to $MAX subtasks" ;;
+            required) text="REQUIRED. The Lead or the size check found this too big for one PR. You must return decision \`split\` with 2 to $MAX subtasks (read the latest \`<!-- agent:split-required -->\` comment)" ;;
+            *)        text="not allowed (${mode#not-allowed })"; mode=not-allowed ;;
+          esac
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "text=$text" >> "$GITHUB_OUTPUT"
+
       - uses: anthropics/claude-code-action@v1
         id: agent
         env:
@@ -65,7 +87,8 @@ jobs:
 
             Repository: ${{ github.repository }}
             Issue: #${{ github.event.issue.number }}
-            Splitting: ${{ (vars.AGENT_SPLIT == 'false' || contains(github.event.issue.body, '<!-- agent:sub-issue')) && 'not allowed (this is a sub-issue, or splitting is turned off)' || format('allowed, 2 to {0} subtasks', vars.AGENT_MAX_SUBISSUES || '5') }}
+            Splitting: ${{ steps.split.outputs.text }}
+            Size limit: a `ready` design may plan at most ${{ vars.AGENT_MAX_PLANNED_FILES || '20' }} files (tests included); a bigger one is sent back to be split.
 
             Tool rules: create files only with the Write tool (bodies go in .agent-out/, then use --body-file).
             Run every shell command on its own: no &&, ||, ;, pipes, redirects, heredocs or subshells.
@@ -94,8 +117,9 @@ jobs:
           N: ${{ github.event.issue.number }}
           BEFORE: ${{ steps.before.outputs.count }}
           REQUIRE_APPROVAL: ${{ vars.AGENT_REQUIRE_DESIGN_APPROVAL }}
-          SPLIT_ALLOWED: ${{ (vars.AGENT_SPLIT == 'false' || contains(github.event.issue.body, '<!-- agent:sub-issue')) && 'false' || 'true' }}
+          SPLIT_MODE: ${{ steps.split.outputs.mode }}
           AGENT_MAX_SUBISSUES: ${{ vars.AGENT_MAX_SUBISSUES || '5' }}
+          MAX_FILES: ${{ vars.AGENT_MAX_PLANNED_FILES || '20' }}
           AVOID_CONFLICTS: ${{ vars.AGENT_AVOID_CONFLICTS != 'false' && 'true' || '' }}
           AGENT_CONFLICT_IGNORE: ${{ vars.AGENT_CONFLICT_IGNORE }}
         run: |
@@ -112,13 +136,35 @@ jobs:
           esac
           # The files the design plans to change (the Changes table), for conflict avoidance (overlap.sh).
           files=$(echo "${OUT:-null}" | jq -c '[.files[]? | select(type == "string" and length > 0) | sub("^\\./"; "")] | unique')
+          nfiles=$(echo "$files" | jq length)
+          if [ "$decision" = "split" ] && [ "$SPLIT_MODE" = "not-allowed" ]; then
+            echo "::warning::Architect chose split, but splitting is not allowed here"
+            decision=needs-human
+          fi
+          # Asked to split (by the Lead or the size check) but didn't: the Lead decides, no second round.
+          if [ "$SPLIT_MODE" = "required" ] && { [ "$decision" = "ready" ] || [ "$decision" = "needs-human" ]; }; then
+            scripts/agents/transition.sh "$N" agent:needs-decision
+            gh issue comment "$N" --body "⚠️ The Architect was asked to split this issue but returned \`$decision\` ([run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Handing to the Lead."
+            scripts/agents/progress.sh "$N" "🏛 **Architect**: asked to split, returned $decision, handed to the Lead"
+            exit 0
+          fi
+          # Size check: a design this big doesn't fit one Implementor run or one reviewable PR.
+          if { [ "$decision" = "ready" ] || [ "$decision" = "needs-human" ]; } && [ "$nfiles" -gt "${MAX_FILES:-20}" ]; then
+            if [ "$SPLIT_MODE" = "allowed" ]; then
+              gh issue comment "$N" --body "<!-- agent:split-required -->
+          📏 **Too big for one PR:** the design plans $nfiles files, the limit is $MAX_FILES (\`AGENT_MAX_PLANNED_FILES\`). The Architect runs again and splits it into sub-issues, keeping the design above as the shared design." >/dev/null
+              scripts/agents/transition.sh "$N" agent:analyzed
+              scripts/agents/progress.sh "$N" "🏛 **Architect**: design plans $nfiles files (limit $MAX_FILES), 📏 splitting it"
+            else
+              scripts/agents/transition.sh "$N" agent:needs-decision
+              gh issue comment "$N" --body "📏 **Too big for one PR:** the design plans $nfiles files, the limit is $MAX_FILES (\`AGENT_MAX_PLANNED_FILES\`), and this issue can't be split further. Handing to the Lead."
+              scripts/agents/progress.sh "$N" "🏛 **Architect**: design plans $nfiles files (limit $MAX_FILES), can't split, handed to the Lead"
+            fi
+            exit 0
+          fi
           if [ "$files" != "[]" ] && [ "$decision" != "split" ]; then
             gh issue comment "$N" --body "<!-- agent:files $files -->
           📁 Planned files: $(echo "$files" | jq -r 'map("`" + . + "`") | join(", ")')" >/dev/null
-          fi
-          if [ "$decision" = "split" ] && [ "$SPLIT_ALLOWED" != "true" ]; then
-            echo "::warning::Architect chose split, but splitting is not allowed here"
-            decision=needs-human
           fi
           if [ "$decision" = "split" ]; then
             echo "${OUT}" > .agent-out/plan.json

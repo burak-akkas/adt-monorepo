@@ -3,7 +3,9 @@ name: "Agent · Lead"
 # The decision maker. Runs when any issue or PR gets `agent:needs-decision`
 # (open questions, high-risk design, review deadlock, agent failure).
 # It picks one action that unblocks the team, or escalates to a human (`agent:needs-human`).
-# Budget: AGENT_MAX_LEAD_DECISIONS per item (default 3), then it always escalates.
+# Budget: AGENT_MAX_LEAD_DECISIONS per item (default 3) since its last escalation to a human, then it
+# escalates. When a human sends an escalated item back to the team, the Lead gets a fresh budget.
+# On an issue, `split` sends it back to the Architect with splitting required (split-mode.sh).
 # PR events use pull_request_target: unlike pull_request, it also fires for PRs with merge
 # conflicts (GitHub creates no merge commit for those), and it always runs this workflow
 # file from the default branch. Jobs only act on same-repo PRs and check out the PR head explicitly.
@@ -38,6 +40,8 @@ jobs:
       TRUSTED: .agent-trusted/.github/agents
       BIN: .agent-trusted/scripts/agents
       MAX_DECISIONS: ${{ vars.AGENT_MAX_LEAD_DECISIONS || '3' }}
+      AGENT_SPLIT: ${{ vars.AGENT_SPLIT }}                                  # split-mode.sh
+      AGENT_MAX_SPLIT_DEPTH: ${{ vars.AGENT_MAX_SPLIT_DEPTH || '2' }}
     steps:
       - uses: actions/create-github-app-token@v2
         id: app
@@ -68,8 +72,18 @@ jobs:
         run: |
           mkdir -p .agent-out
           printf '.agent-out/\n.agent-trusted/\n' >> .git/info/exclude
-          used=$("$BIN/count-comments.sh" "$N" lead)
+          used=$("$BIN/lead-budget.sh" "$N")
           echo "used=$used" >> "$GITHUB_OUTPUT"
+          echo "total=$("$BIN/count-comments.sh" "$N" lead)" >> "$GITHUB_OUTPUT"
+          if [ "$KIND" = issue ]; then
+            split=$("$BIN/split-mode.sh" "$N")
+            case "$split" in
+              not-allowed*) echo "split=not-allowed" >> "$GITHUB_OUTPUT"
+                            echo "split_text=not possible (${split#not-allowed })" >> "$GITHUB_OUTPUT" ;;
+              *)            echo "split=allowed" >> "$GITHUB_OUTPUT"
+                            echo "split_text=possible, choose \`split\` if the work is too big for one Implementor run or one reviewable PR" >> "$GITHUB_OUTPUT" ;;
+            esac
+          fi
           if [ "$used" -ge "$MAX_DECISIONS" ]; then
             "$BIN/transition.sh" "$N" agent:needs-human
             gh api "repos/$GITHUB_REPOSITORY/issues/$N/comments" -f body="🛑 Lead has already made $used decisions here without resolving it. Escalating to a human." >/dev/null
@@ -92,7 +106,8 @@ jobs:
             Repository: ${{ github.repository }}
             Item: ${{ env.KIND }} #${{ env.N }}
             Default branch: ${{ github.event.repository.default_branch }} (all agent branches start from it and PRs target it)
-            Decisions already made on this item: ${{ steps.guard.outputs.used }} of ${{ env.MAX_DECISIONS }}
+            Decisions already made on this item: ${{ steps.guard.outputs.used }} of ${{ env.MAX_DECISIONS }} (since its last escalation to a human)
+            ${{ env.KIND == 'issue' && format('Splitting this issue into sub-issues: {0}', steps.guard.outputs.split_text) || '' }}
 
             Tool rules: create files only with the Write tool (bodies go in .agent-out/, then use --body-file).
             Run every shell command on its own: no &&, ||, ;, pipes, redirects, heredocs or subshells.
@@ -101,7 +116,7 @@ jobs:
             --max-turns 40
             ${{ (vars.AGENT_LEAD_MODEL || vars.AGENT_MODEL) && format('--model {0}', vars.AGENT_LEAD_MODEL || vars.AGENT_MODEL) || '' }}
             --allowedTools "Read,Grep,Glob,Write,Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue comment:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh pr comment:*),Bash(git log:*)"
-            --json-schema '{"type":"object","properties":{"action":{"type":"string","enum":["restart-analysis","redesign","implement","fix","re-review","qa","approve","close","escalate"]},"rationale":{"type":"string"}},"required":["action","rationale"]}'
+            --json-schema '{"type":"object","properties":{"action":{"type":"string","enum":["restart-analysis","redesign","split","implement","fix","re-review","qa","approve","close","escalate"]},"rationale":{"type":"string"}},"required":["action","rationale"]}'
 
       - name: Report denied tools
         if: ${{ !cancelled() && steps.agent.outputs.execution_file != '' }}
@@ -118,11 +133,12 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           OUT: ${{ steps.agent.outputs.structured_output }}
-          USED: ${{ steps.guard.outputs.used }}
+          TOTAL: ${{ steps.guard.outputs.total }}
+          SPLIT: ${{ steps.guard.outputs.split }}
         run: |
           action=$(echo "${OUT:-null}" | jq -r '.action // "error"')
           reason=$(echo "${OUT:-null}" | jq -r '.rationale // "no rationale"')
-          if [ "$("$BIN/count-comments.sh" "$N" lead)" -le "$USED" ]; then
+          if [ "$("$BIN/count-comments.sh" "$N" lead)" -le "$TOTAL" ]; then
             echo "::warning::Lead returned '$action' but posted no decision comment"
             action=missing-comment
           fi
@@ -132,6 +148,15 @@ jobs:
             issue:restart-analysis) "$BIN/transition.sh" "$N" agent:start ;;
             issue:redesign)         "$BIN/transition.sh" "$N" agent:analyzed ;;
             issue:implement)        "$BIN/transition.sh" "$N" agent:ready ;;
+            issue:split)            if [ "$SPLIT" = allowed ]; then
+                                      gh api "repos/$GITHUB_REPOSITORY/issues/$N/comments" -f body="<!-- agent:split-required -->
+          🧩 **The Lead asked for a split.** The Architect runs again and splits this issue into sub-issues (see the Lead's comment above)." >/dev/null
+                                      "$BIN/transition.sh" "$N" agent:analyzed
+                                    else
+                                      action=escalate
+                                      "$BIN/transition.sh" "$N" agent:needs-human
+                                      gh api "repos/$GITHUB_REPOSITORY/issues/$N/comments" -f body="⚠️ Lead chose \`split\`, but this issue can't be split further. Escalating to a human." >/dev/null
+                                    fi ;;
             issue:close)            "$BIN/transition.sh" "$N" agent:out-of-scope
                                     gh issue close "$N" --reason "not planned" ;;
             pr:fix)                 "$BIN/transition.sh" "$N" agent:changes-requested ;;

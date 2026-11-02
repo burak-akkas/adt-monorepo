@@ -51,6 +51,11 @@ advance() {
     child=$(gh api "repos/$repo/issues/$c")
     [ "$(echo "$child" | jq -r .state)" = "open" ] || continue
     echo "$child" | jq -e '[.labels[].name] | index("agent:blocked")' >/dev/null || continue
+    # Parked by the Implementor on an outside dependency: release-blocked.sh restarts it, already designed.
+    if gh api --paginate --slurp "repos/$repo/issues/$c/comments" \
+         | jq -e --argjson bot "$bot" '[.[][] | select(.user.id == $bot and ((.body // "") | contains("<!-- agent:waits-on ")))] | length > 0' >/dev/null; then
+      continue
+    fi
     deps=$(echo "$child" | jq -r '(.body // "") | capture("<!-- agent:sub-issue parent=[0-9]+ depends=(?<d>[0-9,]*)").d // ""' | tr ',' ' ')
     ready=true
     for d in $deps; do [[ "$completed" == *" $d "* ]] || ready=false; done

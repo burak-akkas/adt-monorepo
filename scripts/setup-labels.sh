@@ -18,7 +18,7 @@ label "agent:in-progress"     "1d76db" "Implementor agent is working"
 label "agent:pr-open"         "5319e7" "A PR is open for this issue"
 label "agent:out-of-scope"    "cccccc" "Analyst judged this not actionable"
 label "agent:split"           "bfdadc" "Split into sub-issues; closes when all are done"
-label "agent:blocked"         "e4e669" "Sub-issue waiting for the sub-issues it depends on"
+label "agent:blocked"         "e4e669" "Waiting for the issues it depends on; starts when they close"
 
 # PR states
 label "agent:review"            "c2e0c6" "Ask the Reviewer agent to review this PR"

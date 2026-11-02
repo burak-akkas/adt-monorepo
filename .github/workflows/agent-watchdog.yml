@@ -86,3 +86,9 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: scripts/agents/subissues.sh --sweep | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Restart issues whose dependencies are done
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: scripts/agents/release-blocked.sh | tee -a "$GITHUB_STEP_SUMMARY"

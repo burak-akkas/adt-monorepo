@@ -28,7 +28,7 @@ if [ "$bad" != "0" ]; then
 fi
 
 gh label create "agent:split" -R "$repo" --color "bfdadc" --description "Split into sub-issues; closes when all are done" --force >/dev/null
-gh label create "agent:blocked" -R "$repo" --color "e4e669" --description "Sub-issue waiting for the sub-issues it depends on" --force >/dev/null
+gh label create "agent:blocked" -R "$repo" --color "e4e669" --description "Waiting for the issues it depends on; starts when they close" --force >/dev/null
 
 nums='[]'
 rows=""

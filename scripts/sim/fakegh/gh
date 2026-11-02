@@ -1,0 +1,394 @@
+#!/usr/bin/env python3
+"""A fake `gh` CLI for the agent-team simulator.
+
+It keeps a whole fake repository in a JSON state file ($FAKE_GH_STATE) and answers the `gh` calls
+the agent scripts and workflows make (gh api …, gh pr view/list/comment/checks/merge/diff,
+gh run list, gh issue comment). Every invocation holds a file lock, so simulated workflow runs can
+call it concurrently.
+
+Besides answering, it injects real-world trouble the state asks for (API errors, mergeability
+UNKNOWN, slow or hanging CI, failing merges, update-branch refused because the base changed
+workflow files) and audits every merge against the queue's invariants (state["violations"]).
+
+The model of a repository:
+- the base branch is a version counter (base_version); a commit sha records which base version it
+  contains, the PR's own diff (files), and its commit metadata
+- items are PRs and issues, with labels, comments, a head sha, and flags (conflict, draft, …)
+- events (labeled, synchronize) are appended for the simulator to dispatch as workflow runs
+"""
+import fcntl, json, os, random, re, subprocess, sys, urllib.parse
+
+STATE = os.environ["FAKE_GH_STATE"]
+BOT = int(os.environ.get("AGENT_BOT_ID", "999"))
+args = sys.argv[1:]
+
+lock = open(STATE + ".lock", "a")
+fcntl.flock(lock, fcntl.LOCK_EX)
+st = json.load(open(STATE))
+st["calls"] = st.get("calls", 0) + 1
+log = st.setdefault("log", [])
+log.append(" ".join(args)[:200])
+if len(log) > 4000:
+    del log[:1000]
+rng = random.Random(st.get("seed", 0) * 1000003 + st["calls"])
+
+
+def save():
+    tmp = STATE + ".tmp"
+    json.dump(st, open(tmp, "w"))
+    os.replace(tmp, STATE)
+
+
+def done(code=0):
+    save()
+    sys.exit(code)
+
+
+def fail(msg, code=1):
+    sys.stderr.write(msg + "\n")
+    done(code)
+
+
+def tick():
+    st["clock"] = st.get("clock", 0) + 1
+    h, r = divmod(st["clock"], 3600)
+    m, s = divmod(r, 60)
+    return "2020-01-01T%02d:%02d:%02dZ" % (h % 24, m, s)
+
+
+def opt(name, default=None):
+    return args[args.index(name) + 1] if name in args else default
+
+
+def fields():
+    out = {}
+    for i, a in enumerate(args):
+        if a in ("-f", "-F"):
+            k, v = args[i + 1].split("=", 1)
+            out.setdefault(k, []).append(v)
+    return out
+
+
+def emit(obj, slurp=False):
+    if slurp:
+        obj = [obj]
+    jq = opt("--jq")
+    if jq:
+        r = subprocess.run(["jq", "-r", jq], input=json.dumps(obj), capture_output=True, text=True)
+        sys.stdout.write(r.stdout)
+        if r.returncode:
+            sys.stderr.write(r.stderr)
+            done(r.returncode)
+    else:
+        sys.stdout.write(json.dumps(obj) + "\n")
+    done(0)
+
+
+def item(n):
+    it = st["items"].get(str(n))
+    if it is None:
+        fail("HTTP 404: Not Found (#%s)" % n)
+    return it
+
+
+def violation(kind, **kw):
+    st.setdefault("violations", []).append(dict(kind=kind, **kw))
+
+
+def add_comment(n, body, user=BOT):
+    c = {"id": len(st["comments_all"]) + 1, "body": body, "user": {"id": user}, "created_at": tick()}
+    st["comments_all"].append(c)
+    item(n).setdefault("comments", []).append(c["id"])
+    return c
+
+
+def comments(n):
+    ids = set(item(n).get("comments", []))
+    return [c for c in st["comments_all"] if c["id"] in ids]
+
+
+def issue_view(n):
+    """GET repos/…/issues/<n>, as the REST API returns it. `author` is the user id that opened it
+    (issues created through `gh issue create` are the bot's; default: a human)."""
+    it = item(n)
+    state = it.get("state", "OPEN")
+    return {"number": int(n), "id": 10**6 + int(n), "title": it.get("title", "T%s" % n), "body": it.get("body", ""),
+            "user": {"id": it.get("author", 1)}, "state": "open" if state == "OPEN" else "closed",
+            "state_reason": it.get("state_reason") if state != "OPEN" else None,
+            "labels": [{"name": l} for l in it.get("labels", [])],
+            "pull_request": {"url": "x"} if it.get("kind", "pr") == "pr" else None}
+
+
+def approved_sha(n):
+    import re
+    found = [m.group(1) for c in comments(n) if c["user"]["id"] == BOT
+             for m in re.finditer(r"<!-- agent:approved-sha ([0-9a-f]{40}) -->", c["body"])]
+    return found[-1] if found else None
+
+
+def pr_view(n, keys):
+    it = item(n)
+    out = {}
+    for k in keys:
+        if k == "state": out[k] = it.get("state", "OPEN")
+        elif k == "isDraft": out[k] = it.get("draft", False)
+        elif k == "headRefOid": out[k] = it["head"]
+        elif k == "baseRefName": out[k] = st["base"]
+        elif k == "labels": out[k] = [{"name": l} for l in it.get("labels", [])]
+        elif k == "mergeable":
+            if rng.random() < st.get("p_unknown", 0): out[k] = "UNKNOWN"
+            else: out[k] = "CONFLICTING" if it.get("conflict") else "MERGEABLE"
+        elif k == "closingIssuesReferences": out[k] = [{"number": it["issue"]}] if it.get("issue") else []
+        elif k == "number": out[k] = int(n)
+        elif k == "title": out[k] = "T%s" % n   # the same title the issue listing and run titles use
+        elif k == "headRefName": out[k] = it.get("branch", "agent/issue-%s" % n)
+        else: out[k] = None
+    return out
+
+
+def checks_for(sha):
+    """Required check (workflow "CI") on a commit. Outcomes come from check_plan, drawn per commit:
+    pass, fail, hang (pending forever), none (never reports), slow:N (pending for N polls, then pass)."""
+    plan = st.setdefault("checks", {})
+    if sha not in plan:
+        plan[sha] = st["check_plan"].pop(0) if st.get("check_plan") else st.get("default_checks", "pass")
+    st.setdefault("ci_runs", {})[sha] = 1
+    c = plan[sha]
+    if c.startswith("slow:"):
+        polls = st.setdefault("polls", {})
+        polls[sha] = polls.get(sha, 0) + 1
+        c = "pending" if polls[sha] <= int(c.split(":")[1]) else "pass"
+    if c == "hang": c = "pending"
+    if c == "none": return []
+    # state["workflows"]: the workflows that run (a monorepo's path-filtered CI runs only some of them)
+    return [{"workflow": w, "name": "check", "bucket": c, "link": "https://ci.example/" + sha[:7]} for w in st.get("workflows", ["CI"])]
+
+
+def check_outcome(sha):
+    c = st.get("checks", {}).get(sha, st.get("default_checks", "pass"))
+    return "pass" if c.startswith("slow:") or c == "pass" else c
+
+
+# --- injected trouble -----------------------------------------------------------------------
+for bad in list(st.get("fail_cmds", [])):              # targeted, one-shot
+    if bad in " ".join(args):
+        st["fail_cmds"].remove(bad)
+        fail("HTTP 502: injected failure (%s)" % bad)
+# Scripted concurrency for deterministic tests: when a call matches (and the PR has if_label),
+# another "run" acts first: set labels, approve the head, push a commit… One-shot each.
+for hook in list(st.get("hooks", [])):
+    it = st["items"].get(str(hook.get("pr")))
+    if hook["match"] in " ".join(args) and (not hook.get("if_label") or (it and hook["if_label"] in it.get("labels", []))):
+        st["hooks"].remove(hook)
+        if "labels" in hook: it["labels"] = list(hook["labels"])
+        if hook.get("draft"): it["draft"] = True   # a human converts the PR to a draft, right now
+        for r in st.get("run_hooks", {}).pop(hook["match"], []):   # another workflow run starts, right now
+            st.setdefault("active_runs", []).append(r)
+        if hook.get("human_merge"):   # a human merges into the base by hand, right now
+            st["base_version"] += 1
+            st.setdefault("human_merges", []).append(st["calls"])
+        if hook.get("approve_head"): add_comment(hook["pr"], "<!-- agent:qa -->\n**Verdict:** pass\n<!-- agent:approved-sha %s -->" % it["head"])
+        if hook.get("push"):
+            st["shas"][hook["push"]] = dict(st["shas"][it["head"]]); it["head"] = hook["push"]
+            st["events"].append(["synchronize", str(hook["pr"]), hook["push"], "push"])
+        break
+if args[0] not in ("run",) and rng.random() < st.get("p_api_flake", 0):   # random, any call
+    st["flakes"] = st.get("flakes", 0) + 1
+    fail("HTTP 502: Bad Gateway (simulated)")
+
+cmd = args[0]
+if cmd == "api":
+    method = opt("-X", "GET")
+    path = next(a for a in args[1:] if a.startswith("repos/") or a.startswith("/users")).split("?")[0]
+    parts = path.split("/")[3:]   # after repos/<owner>/<repo>
+    slurp = "--slurp" in args
+    f = fields()
+    if parts[0] == "issues" and len(parts) == 1:   # list open issues and PRs (watchdog)
+        out = []
+        for n, it in st["items"].items():
+            if it.get("state", "OPEN") != "OPEN":
+                continue
+            out.append({"number": int(n), "pull_request": {} if it.get("kind", "pr") == "pr" else None,
+                        "draft": it.get("draft", False), "updated_at": "2020-01-01T00:00:00Z", "title": "T%s" % n,
+                        "body": it.get("body", ""),
+                        "labels": [{"name": l} for l in it.get("labels", [])]})
+        emit(out, slurp)
+    if parts[0] == "issues" and parts[1] == "comments":
+        c = next(c for c in st["comments_all"] if c["id"] == int(parts[2]))
+        if method == "PATCH":
+            c["body"] = f["body"][0]
+        emit(c)
+    n = parts[1] if len(parts) > 1 else None
+    if parts[0] == "issues" and len(parts) == 3 and parts[2] == "comments":
+        if method == "POST" or "body" in f:
+            emit(add_comment(n, f["body"][0]))
+        emit(comments(n), slurp)
+    if parts[0] == "issues" and len(parts) == 4 and parts[2] == "labels" and method == "DELETE":
+        lab = urllib.parse.unquote(parts[3])
+        it = item(n)
+        if lab in it.get("labels", []):
+            it["labels"].remove(lab)
+            st["events"].append(["unlabeled", n, lab])
+        emit({})
+    if parts[0] == "issues" and len(parts) == 3 and parts[2] == "labels":
+        it = item(n)
+        if method == "POST":
+            for l in f["labels[]"]:
+                if l not in it.setdefault("labels", []):
+                    it["labels"].append(l)
+                it.setdefault("label_at", {})[l] = tick()
+                st["events"].append(["labeled", n, l])   # GitHub fires `labeled` even for a label already there
+            emit([])
+        emit([{"name": l} for l in it.get("labels", [])])
+    if parts[0] == "issues" and len(parts) == 3 and parts[2] == "events":
+        emit([{"event": "labeled", "label": {"name": l}, "created_at": t} for l, t in item(n).get("label_at", {}).items()], slurp)
+    if parts[0] == "issues" and len(parts) == 3 and parts[2] == "assignees":
+        emit({})
+    if parts[0] == "issues" and len(parts) == 3 and parts[2] == "sub_issues" and method == "POST":
+        item(n).setdefault("sub_issues", []).append(int(f["sub_issue_id"][0]) - 10**6)
+        emit({})
+    if parts[0] == "issues" and len(parts) == 2:
+        emit(issue_view(n))
+    if parts[0] == "compare":
+        a, b = parts[1].split("...")
+        if b == st["base"]:   # <sha>...<base>: base commits missing from <sha>
+            st.setdefault("last_fresh_check", {})[a] = st["calls"]
+            if a not in st["shas"]:
+                emit({"ahead_by": 0, "status": "ahead"})   # a commit on the base itself
+            emit({"ahead_by": st["base_version"] - st["shas"][a]["base_version"], "status": "ahead"})
+        if a == st["base"]:   # <base>...<sha>: the PR's own diff as of <sha>
+            emit({"files": st["shas"][b]["files"]})
+        emit({"status": "ahead", "ahead_by": 0})
+    if parts[0] == "commits":
+        emit(st["shas"][parts[1]]["commit"])
+    if parts[0] == "pulls" and len(parts) == 2:
+        emit({"head": {"ref": item(n).get("branch", "agent/issue-%s" % n)}})
+    if parts[0] == "pulls" and parts[2] == "files":
+        emit([{"filename": f["filename"]} for f in st["shas"][item(n)["head"]]["files"]], slurp)
+    if parts[0] == "pulls" and parts[2] == "update-branch":
+        it = item(n)
+        if it.get("state", "OPEN") != "OPEN": fail("HTTP 422: pull request is not open")
+        if f["expected_head_sha"][0] != it["head"]: fail("HTTP 422: expected head sha didn't match")
+        if it.get("conflict"): fail("HTTP 422: merge conflict between base and head")
+        if st["shas"][it["head"]]["base_version"] < st.get("workflow_version", -1):
+            fail("HTTP 403: refusing to allow a GitHub App to create or update workflow without `workflows` permission")
+        old = it["head"]
+        st["sha_counter"] = st.get("sha_counter", 0x10000) + 1
+        new = "%040x" % st["sha_counter"]
+        st["shas"][new] = {"base_version": st["base_version"], "files": st["shas"][old]["files"],
+                           "commit": {"parents": [{"sha": old}, {"sha": "b%039d" % st["base_version"]}], "author": {"id": BOT},
+                                      "committer": {"login": "web-flow"}, "commit": {"verification": {"verified": True}}}}
+        it["head"] = new
+        st["events"].append(["synchronize", n, new, "update"])
+        st["updates"] = st.get("updates", 0) + 1
+        emit({"message": "Updating pull request branch."})
+    if parts[0] == "deployments" and len(parts) == 1:   # state["deployments"]: [{id, sha, environment, state, url}]
+        want = urllib.parse.parse_qs(next(a for a in args[1:] if a.startswith("repos/")).partition("?")[2]).get("sha", [None])[0]
+        emit([{"environment": d["environment"], "statuses_url": "repos/o/r/deployments/%s/statuses" % d["id"]}
+              for d in st.get("deployments", []) if d["sha"] == want])
+    if parts[0] == "deployments" and len(parts) == 3:
+        d = next(d for d in st["deployments"] if str(d["id"]) == parts[1])
+        emit([{"state": d["state"], "environment_url": d.get("url")}])
+    if parts[0] == "branches":
+        emit({"commit": {"sha": "b%039d" % st["base_version"]}})
+    fail("fake gh: unsupported api call: " + path)
+
+if cmd == "pr":
+    sub = args[1]
+    if sub == "view":
+        emit(pr_view(args[2], opt("--json").split(",")))
+    if sub == "list":
+        label, keys, want = opt("--label"), opt("--json").split(","), opt("--state", "open")
+        states = {"open": ("OPEN",), "closed": ("CLOSED", "MERGED"), "merged": ("MERGED",), "all": ("OPEN", "CLOSED", "MERGED")}[want]
+        out = [pr_view(n, keys) for n, it in st["items"].items()
+               if it.get("kind", "pr") == "pr" and it.get("state", "OPEN") in states and (not label or label in it.get("labels", []))]
+        emit(out)
+    if sub == "comment":
+        add_comment(args[2], opt("--body") if "--body" in args else open(opt("--body-file")).read())
+        done()
+    if sub == "checks":
+        if st.get("bump_base_on_checks", 0) > 0:   # a human merges something while CI runs
+            st["bump_base_on_checks"] -= 1
+            st["base_version"] += 1
+        emit(checks_for(item(args[2])["head"]))
+    if sub == "merge":
+        n = args[2]
+        it = item(n)
+        if opt("--match-head-commit") != it["head"]: fail("GraphQL: Head branch was modified")
+        if it.get("state", "OPEN") != "OPEN": fail("GraphQL: Pull request is not open")
+        if it.get("draft"): fail("GraphQL: Pull Request is still a draft (mergePullRequest)")
+        if it.get("merge_fails", 0) > 0:
+            it["merge_fails"] -= 1
+            fail("GraphQL: Base branch was modified. Review and try the merge again.")
+        h = it["head"]
+        audit = {"pr": int(n), "sha": h,
+                 "up_to_date": st["shas"][h]["base_version"] == st["base_version"],
+                 "green": check_outcome(h) == "pass",
+                 "approved": approved_sha(n) == h,
+                 "by_integrator": "agent:integrating" in it.get("labels", []),
+                 "draft": it.get("draft", False)}
+        if st.get("audit_qa"):
+            # QA in the queue: the latest QA report (a pass), Lead approval or human approval approved a
+            # commit with exactly the own changes that land now.
+            bodies = [c["body"] for c in st["comments_all"] if c["id"] in it["comments"] and c["user"]["id"] == BOT]
+            last = next((b for b in reversed(bodies) if "<!-- agent:qa -->" in b or (("<!-- agent:lead -->" in b or "<!-- agent:queued -->" in b)
+                                                                                   and "<!-- agent:approved-sha " in b)), "")
+            m = re.findall(r"<!-- agent:approved-sha ([0-9a-f]{40}) -->", last)
+            audit["qa_tested"] = bool(m) and ("<!-- agent:qa -->" not in last or "Verdict:** pass" in last) \
+                and st["shas"].get(m[-1], {}).get("files") == st["shas"][h]["files"]
+        st.setdefault("merge_audit", []).append(audit)
+        required = ("up_to_date", "green", "approved") + (() if st.get("legacy") else ("by_integrator",)) \
+            + (("qa_tested",) if st.get("audit_qa") else ())
+        bad = [k for k in required if not audit[k]] + (["draft"] if audit["draft"] else [])
+        if bad:
+            # A human merging by hand right after the Integrator's last freshness check: GitHub doesn't
+            # stop that without a branch rule. Reported apart from the queue's own mistakes. A human
+            # merge the simulated world records at the check's own call count happened after the check.
+            race = bad == ["up_to_date"] and any(c >= st.get("last_fresh_check", {}).get(h, 0) for c in st.get("human_merges", []))
+            violation("human-merge-race" if race else "unsafe-merge", pr=int(n), problems=bad)
+        it["state"] = "MERGED"
+        st["base_version"] += 1
+        st.setdefault("merged", []).append(int(n))
+        for m in st.get("conflict_after_merge", {}).get(str(n), []):   # merging this makes others conflict
+            st["items"][str(m)]["conflict"] = True
+        if it.get("merge_error_after"):
+            fail("failed to delete branch: reference does not exist")
+        done()
+    if sub == "diff":
+        sys.stdout.write("\n".join(f["filename"] for f in st["shas"][item(args[2])["head"]]["files"]) + "\n")
+        done()
+    if sub == "close":
+        item(args[2])["state"] = "CLOSED"
+        done()
+    fail("fake gh: unsupported pr " + sub)
+
+if cmd == "run" and args[1] == "list":
+    wf, status = opt("--workflow"), opt("--status")
+    runs = [r for r in st.get("active_runs", []) if (not wf or r["workflow"] == wf) and (not status or r["status"] == status)]
+    emit(runs)
+
+if cmd == "issue" and args[1] == "comment":
+    add_comment(args[2], opt("--body") if "--body" in args else open(opt("--body-file")).read())
+    done()
+if cmd == "issue" and args[1] == "create":
+    n = max([int(k) for k in st["items"]] + [0]) + 1
+    st["items"][str(n)] = {"kind": "issue", "title": opt("--title"), "body": open(opt("--body-file")).read(), "labels": [],
+                           "comments": [], "state": "OPEN", "head": None, "author": BOT}
+    st.setdefault("created_issues", []).append(n)
+    sys.stdout.write("https://github.com/o/r/issues/%d\n" % n)
+    done()
+if cmd == "issue" and args[1] == "close":
+    it = item(args[2])
+    it["state"] = "CLOSED"
+    it["state_reason"] = "not_planned" if opt("--reason") == "not planned" else "completed"
+    st.setdefault("closed_issues", []).append(int(args[2]))
+    done()
+if cmd == "issue" and args[1] == "list":
+    label, want = opt("--label"), opt("--state", "open")
+    out = [{"number": int(n)} for n, it in st["items"].items()
+           if it.get("kind", "pr") == "issue" and (want == "all" or (it.get("state", "OPEN") == "OPEN") == (want == "open"))
+           and (not label or label in it.get("labels", []))]
+    emit(out)
+if cmd == "label" and args[1] == "create":
+    done()
+fail("fake gh: unsupported command: " + " ".join(args))
