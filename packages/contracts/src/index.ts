@@ -3,6 +3,7 @@ import { z } from "zod";
 export * from "./archive.js";
 export * from "./boards.js";
 export * from "./cards.js";
+export * from "./checklist.js";
 export * from "./lists.js";
 export * from "./settings.js";
 export * from "./templates.js";
