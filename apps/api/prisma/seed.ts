@@ -13,6 +13,7 @@ await prisma.appSetting.upsert({
   create: { key: "seeded", value: "true" },
 });
 
+// The seed runs in a single process, so the check-then-create below has no race to handle.
 // The library hashes the password. An existing account is left alone, so running the seed twice changes nothing.
 for (const email of ["a@example.test", "b@example.test"]) {
   if (await prisma.user.findUnique({ where: { email } })) continue;

@@ -9,7 +9,7 @@ import { readAuthConfig } from "./auth.js";
 
 // These tests run against the real local Postgres (docker compose up -d --wait db), like the e2e suite.
 process.env.DATABASE_URL ??= "postgresql://kanban:kanban@localhost:5432/kanban";
-const ORIGIN ="http://localhost:3000";
+const ORIGIN = "http://localhost:3000";
 const PASSWORD = "a-good-password-1";
 const run = Math.random().toString(36).slice(2, 8);
 const email = (name: string) => `${name}-${run}@auth-spec.test`;
