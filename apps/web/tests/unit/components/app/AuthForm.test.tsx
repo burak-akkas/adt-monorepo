@@ -1,0 +1,88 @@
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { signUp, signIn, push } = vi.hoisted(() => ({ signUp: vi.fn(), signIn: vi.fn(), push: vi.fn() }));
+vi.mock("@/lib/auth-client", () => ({ authClient: { signUp: { email: signUp }, signIn: { email: signIn } } }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
+
+import { AuthForm } from "@/components/app/AuthForm";
+
+beforeEach(() => {
+  signUp.mockReset();
+  signIn.mockReset();
+  push.mockReset();
+});
+
+async function fill(email: string, password: string) {
+  const user = userEvent.setup();
+  await user.type(screen.getByLabelText("Email"), email);
+  await user.type(screen.getByLabelText("Password"), password);
+  return user;
+}
+
+describe("AuthForm", () => {
+  it("has labelled fields and a submit button", () => {
+    render(<AuthForm mode="register" />);
+    expect(screen.getByLabelText("Email")).toBeInTheDocument();
+    expect(screen.getByLabelText("Password")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Register" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Log in" })).toHaveAttribute("href", "/login");
+  });
+
+  it("shows a weak password error without calling the server", async () => {
+    render(<AuthForm mode="register" />);
+    const user = await fill("a@example.test", "short");
+    await user.click(screen.getByRole("button", { name: "Register" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Password must be at least 10 characters.");
+    expect(signUp).not.toHaveBeenCalled();
+  });
+
+  it("shows an error for a taken email", async () => {
+    signUp.mockResolvedValue({ error: { status: 422, code: "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL" } });
+    render(<AuthForm mode="register" />);
+    const user = await fill("a@example.test", "test-password-123");
+    await user.click(screen.getByRole("button", { name: "Register" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("An account with this email already exists.");
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("redirects to the board after a successful register", async () => {
+    signUp.mockResolvedValue({ data: {}, error: null });
+    render(<AuthForm mode="register" />);
+    const user = await fill("A@Example.test", "test-password-123");
+    await user.click(screen.getByRole("button", { name: "Register" }));
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/"));
+    expect(signUp).toHaveBeenCalledWith(expect.objectContaining({ email: "a@example.test" }));
+  });
+
+  it("redirects after a successful login", async () => {
+    signIn.mockResolvedValue({ data: {}, error: null });
+    render(<AuthForm mode="login" />);
+    const user = await fill("a@example.test", "test-password-123");
+    await user.click(screen.getByRole("button", { name: "Log in" }));
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/"));
+  });
+
+  it("shows the same login error whatever the cause", async () => {
+    const messages: string[] = [];
+    for (const code of ["INVALID_EMAIL_OR_PASSWORD", "USER_NOT_FOUND"]) {
+      signIn.mockResolvedValue({ error: { status: 401, code } });
+      const { unmount } = render(<AuthForm mode="login" />);
+      const user = await fill("a@example.test", "test-password-123");
+      await user.click(screen.getByRole("button", { name: "Log in" }));
+      messages.push((await screen.findByRole("alert")).textContent ?? "");
+      unmount();
+    }
+    expect(messages[0]).toBe("Invalid email or password.");
+    expect(messages[1]).toBe(messages[0]);
+  });
+
+  it("shows a generic error when the call throws", async () => {
+    signIn.mockRejectedValue(new Error("offline"));
+    render(<AuthForm mode="login" />);
+    const user = await fill("a@example.test", "test-password-123");
+    await user.click(screen.getByRole("button", { name: "Log in" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Something went wrong. Please try again.");
+  });
+});

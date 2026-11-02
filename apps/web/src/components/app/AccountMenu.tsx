@@ -1,0 +1,34 @@
+"use client";
+
+import Link from "next/link";
+
+import { Button } from "@/components/ui";
+import { useAuth } from "@/hooks/useAuth";
+
+const linkClass =
+  "rounded-md px-3 py-1.5 text-sm text-subtle outline-none hover:bg-surface-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-accent";
+
+export function AccountMenu() {
+  const { status, user, logout } = useAuth();
+  if (status === "loading") return null;
+  if (status === "anonymous") {
+    return (
+      <nav aria-label="Account" className="flex items-center gap-1">
+        <Link href="/login" className={linkClass}>
+          Log in
+        </Link>
+        <Link href="/register" className={linkClass}>
+          Register
+        </Link>
+      </nav>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <span className="max-w-[12rem] truncate text-sm text-subtle">{user.email}</span>
+      <Button variant="secondary" size="sm" onClick={() => void logout()}>
+        Log out
+      </Button>
+    </div>
+  );
+}
