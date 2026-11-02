@@ -52,7 +52,7 @@ A change is done when the checks of every package it touches **and of the packag
 - Where data lives: boards are in the browser's `localStorage` for now, and theme and other preferences stay there. Everything on the server is in Postgres, and each QA site has its own database.
 - What counts as "other" data: other users' boards and cards. An action must never touch them.
 - Risky areas: migrations, login and sessions, anything that deletes.
-- Test accounts: none yet. When accounts exist, the seed script (`apps/api/prisma/seed.ts`) creates two, and they get listed here.
+- Test accounts: `a@example.test` and `b@example.test`, password `test-password-123`, created by the seed script (`apps/api/prisma/seed.ts`) on local, CI and QA databases once accounts exist. Tests can also register new ones.
 - Shared servers QA must not write to: production at https://adt-web-tau.vercel.app/. QA's baseline runs on its own machine.
 
 ## Never
