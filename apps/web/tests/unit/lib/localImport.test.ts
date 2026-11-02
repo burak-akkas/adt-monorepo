@@ -1,7 +1,7 @@
 import { importBoardRequestSchema, type ImportBoardRequest, type ImportBoardResponse } from "@adt/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api-client";
-import { emptyBoard, type Board } from "@/lib/board";
+import { ACTIVITY_TYPES, emptyBoard, type Board } from "@/lib/board";
 import type { BoardEntry } from "@/lib/boards";
 import {
   getImportKey,
@@ -105,6 +105,15 @@ describe("toImportRequest", () => {
     expect(parsed.templates).toEqual([{ name: "Bug", title: "Bug:", priority: "high", labels: ["bug"], checklist: ["repro"] }]);
     expect(parsed.formerLists).toEqual({ gone: "Old list" });
     expect(parsed.settings).toEqual({ background: { type: "color", value: "#445566" }, view: "calendar", doingListId: "doing", doneListId: "done" });
+  });
+
+  it("sends activity entries of every type, including duplicated", () => {
+    const types = ACTIVITY_TYPES.map((type, index) => ({ id: `x${index}`, at: AT, type }));
+    const board = richBoard();
+    board.columns.todo[1] = { ...board.columns.todo[1], activity: types };
+    const parsed = importBoardRequestSchema.parse(toImportRequest(entry("b1", "Work", board), key));
+    expect(parsed.lists[0].cards[1].activity?.map((a) => a.type)).toEqual([...ACTIVITY_TYPES]);
+    expect(ACTIVITY_TYPES).toHaveLength(10);
   });
 
   it("dates archived cards by their newest archived entry, else their creation", () => {

@@ -132,6 +132,83 @@ describe("CardsService", () => {
     expect(await order(bobs.lists[0].id)).toEqual([]);
   });
 
+  describe("duplicate", () => {
+    it("copies the details right after the original and keeps positions dense", async () => {
+      const board = await newBoard(alice, "Dup", ["L"]);
+      const listId = board.lists[0].id;
+      const [a, , c] = await seed(listId, ["a", "b", "c"]);
+      const full = await service.create(listId, alice, {
+        title: "Full",
+        priority: "high",
+        cover: "teal",
+        dueDate: "2026-12-31",
+        notes: "some notes",
+      });
+      await prisma.cardLabel.createMany({
+        data: [
+          { cardId: full.id, name: "bug", position: 0 },
+          { cardId: full.id, name: "ui", position: 1 },
+        ],
+      });
+      await prisma.checklistItem.createMany({
+        data: [
+          { cardId: full.id, text: "one", done: true, position: 0 },
+          { cardId: full.id, text: "two", done: false, position: 1 },
+        ],
+      });
+      await prisma.cardComment.create({ data: { cardId: full.id, text: "hello" } });
+
+      const copy = await service.duplicate(full.id, alice);
+      expect(copy).toMatchObject({
+        title: "Full (copy)",
+        priority: "high",
+        cover: "teal",
+        dueDate: "2026-12-31",
+        notes: "some notes",
+        labels: ["bug", "ui"],
+        listId,
+        position: 4,
+        comments: [],
+      });
+      expect(copy.id).not.toBe(full.id);
+      expect(copy.checklist.map((i) => [i.text, i.done, i.position])).toEqual([["one", false, 0], ["two", false, 1]]);
+      expect(copy.activity).toHaveLength(1);
+      expect(copy.activity[0]).toMatchObject({ type: "duplicated", from: "Full" });
+      expect(copy.activity[0]).not.toHaveProperty("to");
+      // The original is untouched.
+      const original = await service.get(full.id, alice);
+      expect(original.checklist.map((i) => i.done)).toEqual([true, false]);
+      expect(original.comments).toHaveLength(1);
+
+      await service.duplicate(a.id, alice);
+      expect(await order(listId)).toEqual([["a", 0], ["a (copy)", 1], ["b", 2], ["c", 3], ["Full", 4], ["Full (copy)", 5]]);
+      await service.duplicate(c.id, alice);
+      expect(await order(listId)).toEqual([
+        ["a", 0], ["a (copy)", 1], ["b", 2], ["c", 3], ["c (copy)", 4], ["Full", 5], ["Full (copy)", 6],
+      ]);
+    });
+
+    it("truncates a long title so it fits the limit with the suffix", async () => {
+      const board = await newBoard(alice, "Dup long", ["L"]);
+      const [card] = await seed(board.lists[0].id, ["x".repeat(120)]);
+      const copy = await service.duplicate(card.id, alice);
+      expect(copy.title).toHaveLength(120);
+      expect(copy.title).toBe(`${"x".repeat(113)} (copy)`);
+    });
+
+    it("answers 404 for another user's card or an archived card, and changes nothing", async () => {
+      const board = await newBoard(alice, "Dup 404", ["L"]);
+      const listId = board.lists[0].id;
+      const [card, other] = await seed(listId, ["mine", "gone"]);
+      await expect(service.duplicate(card.id, bob)).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.duplicate("does-not-exist", alice)).rejects.toBeInstanceOf(NotFoundException);
+      await prisma.card.update({ where: { id: other.id }, data: { listId: null, boardId: board.id, archivedAt: new Date(), position: 0 } });
+      await expect(service.duplicate(other.id, alice)).rejects.toBeInstanceOf(NotFoundException);
+      expect(await order(listId)).toEqual([["mine", 0]]);
+      expect(await prisma.card.count({ where: { boardId: board.id } })).toBe(1);
+    });
+  });
+
   describe("activity", () => {
     const log = async (cardId: string) => (await prisma.cardActivity.findMany({ where: { cardId } })).length;
 

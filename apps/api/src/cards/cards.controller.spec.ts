@@ -60,6 +60,16 @@ describe("cards over HTTP", () => {
     await server().patch("/cards/abc").send({ title: "x" }).expect(401);
     await server().post("/cards/abc/move").send({ listId: "l", position: 0 }).expect(401);
     await server().delete("/cards/abc").expect(401);
+    await server().post("/cards/abc/duplicate").expect(401);
+  });
+
+  it("duplicates a card with 201 and gives another user a 404", async () => {
+    const listId = await newList(cookieA, "Dup");
+    const card = (await as(cookieA).post(`/lists/${listId}/cards`, { title: "Task", priority: "high" }).expect(201)).body;
+    const res = await as(cookieA).post(`/cards/${card.id}/duplicate`).expect(201);
+    expect(cardResponseSchema.parse(res.body)).toMatchObject({ title: "Task (copy)", priority: "high", position: 1, listId });
+    await as(cookieB).post(`/cards/${card.id}/duplicate`).expect(404);
+    await as(cookieA).post("/cards/does-not-exist/duplicate").expect(404);
   });
 
   it("creates, reads, updates, moves and deletes with the right status codes", async () => {

@@ -1,6 +1,6 @@
-import { activityTypes, type ImportBoardRequest } from "@adt/contracts";
+import type { ImportBoardRequest } from "@adt/contracts";
 import { ApiError, importBoard as postBoard } from "./api-client";
-import { boardLists, insightsListIds, type ActivityEntry, type Board, type Card } from "./board";
+import { boardLists, insightsListIds, type Board, type Card } from "./board";
 import type { BoardEntry } from "./boards";
 import { LEGACY_STORAGE_KEY, loadBoards, STORAGE_KEY } from "./storage";
 
@@ -50,20 +50,13 @@ function toImportCard(card: Card): ImportCard {
     checklist: (card.checklist ?? []).map(({ text, done }) => ({ text, done })),
     comments: (card.comments ?? []).map(({ text, createdAt, editedAt }) => ({ text, createdAt, ...(editedAt !== undefined && { editedAt }) })),
     labels: card.labels ?? [],
-    // Only change types the server knows are sent (the filter follows the contract's activityTypes).
-    activity: (card.activity ?? []).filter(isServerActivity).map(({ type, at, from, to }) => ({
+    activity: (card.activity ?? []).map(({ type, at, from, to }) => ({
       type,
       at,
       ...(from !== undefined && { from }),
       ...(to !== undefined && { to }),
     })),
   };
-}
-
-type ServerActivityType = (typeof activityTypes)[number];
-
-function isServerActivity(entry: ActivityEntry): entry is ActivityEntry & { type: ServerActivityType } {
-  return (activityTypes as readonly string[]).includes(entry.type);
 }
 
 // When an archived card was archived: its newest "archived" entry, else the day it was created.

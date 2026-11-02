@@ -56,6 +56,7 @@ test.describe("cards API", () => {
     expect((await request.patch("api/cards/x", { data: { title: "t" } })).status()).toBe(401);
     expect((await request.post("api/cards/x/move", { data: { listId: "l", position: 0 } })).status()).toBe(401);
     expect((await request.delete("api/cards/x")).status()).toBe(401);
+    expect((await request.post("api/cards/x/duplicate")).status()).toBe(401);
   });
 
   test("A creates, reads, updates, moves and deletes cards", async () => {
@@ -131,6 +132,39 @@ test.describe("cards API", () => {
     const byDone = await a.post(`api/boards/${boardId}/archive/done`);
     expect(byDone.status()).toBe(200);
     expect(types(await byDone.json())).toEqual([["archived", "created"], ["archived", "created"]]);
+  });
+
+  test("A duplicates a card: copy right after it, unticked items, no comments, one duplicated entry", async () => {
+    const { boardId, one } = await freshBoard();
+    await addCard(one, "First");
+    const card = await addCard(one, "Source");
+    await addCard(one, "Last");
+    const withItem = await (await a.post(`api/cards/${card.id}/checklist`, { data: { text: "Step" } })).json();
+    await a.patch(`api/cards/${card.id}/checklist/${withItem.checklist[0].id}`, { data: { done: true } });
+    expect((await a.post(`api/cards/${card.id}/comments`, { data: { text: "A comment" } })).status()).toBe(201);
+
+    const res = await a.post(`api/cards/${card.id}/duplicate`);
+    expect(res.status()).toBe(201);
+    const copy = await res.json();
+    expect(copy).toMatchObject({ title: "Source (copy)", listId: one, position: 2, comments: [] });
+    expect(copy.checklist).toMatchObject([{ text: "Step", done: false }]);
+    expect(copy.activity.map((e: { type: string }) => e.type)).toEqual(["duplicated"]);
+    expect(copy.activity[0]).toMatchObject({ from: "Source" });
+    expect(await layout(boardId)).toEqual([[["First", 0], ["Source", 1], ["Source (copy)", 2], ["Last", 3]], []]);
+
+    const original = await (await a.get(`api/cards/${card.id}`)).json();
+    expect(original.checklist[0].done).toBe(true);
+    expect(original.comments).toHaveLength(1);
+  });
+
+  test("B cannot duplicate A's card, and an archived card cannot be duplicated", async () => {
+    const { boardId, one } = await freshBoard();
+    const card = await addCard(one, "Mine");
+    expect((await b.post(`api/cards/${card.id}/duplicate`)).status()).toBe(404);
+    expect(await layout(boardId)).toEqual([[["Mine", 0]], []]);
+
+    expect((await a.post(`api/cards/${card.id}/archive`)).status()).toBe(200);
+    expect((await a.post(`api/cards/${card.id}/duplicate`)).status()).toBe(404);
   });
 
   test("invalid input returns 400", async () => {

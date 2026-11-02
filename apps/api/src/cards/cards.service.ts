@@ -1,5 +1,5 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
-import type { CardResponse, CreateCardRequest, UpdateCardRequest } from "@adt/contracts";
+import { MAX_CARD_TITLE_LENGTH, type CardResponse, type CreateCardRequest, type UpdateCardRequest } from "@adt/contracts";
 import type { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { recordActivity, type ActivityEntryInput } from "./activity.js";
@@ -7,6 +7,8 @@ import { cardDetails, toCard } from "./card.mapper.js";
 
 /** `YYYY-MM-DD` (already validated by the contract) as UTC midnight, for a `@db.Date` column. */
 const toDate = (value: string) => new Date(`${value}T00:00:00.000Z`);
+
+const COPY_SUFFIX = " (copy)";
 
 @Injectable()
 export class CardsService {
@@ -106,6 +108,33 @@ export class CardsService {
       await tx.card.delete({ where: { id } });
       const rest = await tx.card.findMany({ where: { listId: card.listId }, orderBy: { position: "asc" } });
       await this.renumber(tx, card.listId, rest);
+    });
+  }
+
+  /** Copies a card (details, unticked checklist, no comments or activity) right after the original; positions stay dense. */
+  async duplicate(id: string, userId: string): Promise<CardResponse> {
+    return this.prisma.$transaction(async (tx) => {
+      const source = await this.findOwnedCard(tx, id, userId);
+      const copy = await tx.card.create({
+        data: {
+          listId: source.listId,
+          title: `${source.title.slice(0, MAX_CARD_TITLE_LENGTH - COPY_SUFFIX.length).trimEnd()}${COPY_SUFFIX}`,
+          priority: source.priority,
+          cover: source.cover,
+          dueDate: source.dueDate,
+          notes: source.notes,
+          // Temporary end position; renumber below puts it right after the original.
+          position: source.position + 1000000,
+          labels: { create: source.labels.map(({ name, position }) => ({ name, position })) },
+          checklist: { create: source.checklist.map(({ text, position }) => ({ text, position, done: false })) },
+        },
+      });
+      const others = await tx.card.findMany({ where: { listId: source.listId, id: { not: copy.id } }, orderBy: { position: "asc" } });
+      const at = others.findIndex((card) => card.id === source.id);
+      others.splice(at + 1, 0, copy);
+      await this.renumber(tx, source.listId, others);
+      await recordActivity(tx, copy.id, { type: "duplicated", from: source.title });
+      return toCard(await tx.card.findFirstOrThrow({ where: { id: copy.id }, include: cardDetails }));
     });
   }
 
