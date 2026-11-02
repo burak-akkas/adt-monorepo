@@ -21,5 +21,6 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck -w packages/contracts
       - run: npm run typecheck -w apps/web
-      - run: npm test -w apps/web
+      # Build first: one of the tests checks the built client files.
       - run: npm run build -w apps/web
+      - run: npm test -w apps/web

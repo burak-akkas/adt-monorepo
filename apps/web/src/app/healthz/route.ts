@@ -1,4 +1,5 @@
-import { healthResponseSchema } from "@adt/contracts";
+import { healthResponseSchema, INTERNAL_API_KEY_HEADER } from "@adt/contracts";
+import { readInternalApiKey } from "@/lib/internal-api-key";
 
 export const dynamic = "force-dynamic";
 
@@ -7,7 +8,10 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const web = process.env.COMMIT_SHA;
   try {
-    const response = await fetch(`${process.env.API_URL}/health`, { cache: "no-store" });
+    const response = await fetch(`${process.env.API_URL}/health`, {
+      cache: "no-store",
+      headers: { [INTERNAL_API_KEY_HEADER]: readInternalApiKey() },
+    });
     const api = healthResponseSchema.parse(await response.json());
     return Response.json({ status: api.status, web, api }, { status: response.ok ? 200 : 503 });
   } catch {

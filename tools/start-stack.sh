@@ -13,6 +13,7 @@ export DATABASE_URL="postgresql://kanban:kanban@localhost:5432/$database"
 export API_URL="http://localhost:$api_port"
 export BETTER_AUTH_URL="http://localhost:$web_port"
 export BETTER_AUTH_SECRET="dev-only-stack-secret-not-for-production-0123456789"
+export INTERNAL_API_KEY="dev-only-internal-api-key-not-for-production"
 export COMMIT_SHA="$(git rev-parse --verify -q HEAD || echo dev)"
 
 npm run db:migrate:deploy -w apps/api
