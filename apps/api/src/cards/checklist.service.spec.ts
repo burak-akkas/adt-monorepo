@@ -73,6 +73,28 @@ describe("ChecklistService", () => {
     expect(summary(await service.update(card.id, first, alice, { text: "aa", done: false }))).toEqual(["aa-", "bb-"]);
   });
 
+  it("records checklistDone only when an item goes from not-done to done", async () => {
+    const card = await cardWithItems(alice, ["a", "b"]);
+    const [first, second] = card.checklist.map((i) => i.id);
+    const entries = async () =>
+      (await prisma.cardActivity.findMany({ where: { cardId: card.id, type: "checklistDone" }, orderBy: { at: "asc" } })).map((e) => e.to);
+
+    await service.update(card.id, first, alice, { text: "a2" });
+    expect(await entries()).toEqual([]);
+
+    await service.update(card.id, first, alice, { done: true });
+    expect(await entries()).toEqual(["a2"]);
+
+    await service.update(card.id, first, alice, { done: true });
+    await service.update(card.id, first, alice, { text: "a3" });
+    await service.update(card.id, first, alice, { done: false });
+    expect(await entries()).toEqual(["a2"]);
+
+    await service.update(card.id, second, alice, { text: "bb", done: true });
+    expect(await entries()).toEqual(["a2", "bb"]);
+    expect((await cards.get(card.id, alice)).activity[0]).toMatchObject({ type: "checklistDone", to: "bb" });
+  });
+
   it("deletes an item and keeps positions dense", async () => {
     const card = await cardWithItems(alice, ["a", "b", "c"]);
     const after = await service.remove(card.id, card.checklist[1].id, alice);

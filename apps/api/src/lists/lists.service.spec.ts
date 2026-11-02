@@ -136,6 +136,22 @@ describe("ListsService", () => {
     expect(await order(board.id)).toEqual([["A", 0], ["B", 1]]);
   });
 
+  it("records one archived entry per card when archiving a list, and none for an empty list", async () => {
+    const board = await newBoard(alice, "ArchiveActivity", ["One", "Two"]);
+    const [one, two] = board.lists;
+    await prisma.card.createMany({
+      data: [
+        { listId: one.id, title: "a", position: 0 },
+        { listId: one.id, title: "b", position: 1 },
+      ],
+    });
+    const archived = await service.archiveCards(one.id, alice);
+    expect(archived.map((card) => card.activity.map((entry) => entry.type))).toEqual([["archived"], ["archived"]]);
+    expect(await prisma.cardActivity.count({ where: { card: { boardId: board.id }, type: "archived" } })).toBe(2);
+    expect(await service.archiveCards(two.id, alice)).toEqual([]);
+    expect(await prisma.cardActivity.count({ where: { card: { boardId: board.id } } })).toBe(2);
+  });
+
   it("sets and clears a WIP limit", async () => {
     const board = await newBoard(alice, "Wip", ["A"]);
     const [a] = board.lists;

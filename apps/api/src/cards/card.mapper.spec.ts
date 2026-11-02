@@ -83,6 +83,21 @@ describe("toCard", () => {
     ]);
     expect(card.activity[1]).not.toHaveProperty("from");
   });
+
+  it("keeps the archived, restored, checklistDone and duplicated activity types", () => {
+    const at = new Date("2026-03-01T00:00:00.000Z");
+    const card = toCard({
+      ...base,
+      activity: [
+        { id: "a1", cardId: "c1", type: "archived", at, from: null, to: null },
+        { id: "a2", cardId: "c1", type: "restored", at, from: null, to: null },
+        { id: "a3", cardId: "c1", type: "checklistDone", at, from: null, to: "Write tests" },
+        { id: "a4", cardId: "c1", type: "duplicated", at, from: null, to: null },
+      ],
+    });
+    expect(card.activity.map((entry) => entry.type)).toEqual(["archived", "restored", "checklistDone", "duplicated"]);
+    expect(card.activity[2]).toMatchObject({ to: "Write tests" });
+  });
 });
 
 describe("toArchivedCard", () => {

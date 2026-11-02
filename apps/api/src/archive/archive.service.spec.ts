@@ -127,6 +127,33 @@ describe("ArchiveService", () => {
     expect(await inList(doing.id)).toEqual([["d1", 0], ["d2", 1], ["a", 2]]);
   });
 
+  it("records archived for each archived card (card, list, done list) and restored on restore", async () => {
+    const board = await newBoard(alice, "Activity");
+    const [todo, doing, done] = board.lists;
+    const [single] = await addCards(todo.id, ["single"]);
+    const doingCards = await addCards(doing.id, ["d1", "d2"]);
+    const doneCards = await addCards(done.id, ["x", "y", "z"]);
+    const types = async (cardId: string) =>
+      (await prisma.cardActivity.findMany({ where: { cardId }, orderBy: [{ at: "desc" }, { id: "desc" }] })).map((e) => e.type);
+
+    await archive.archive(single.id, alice);
+    expect(await types(single.id)).toEqual(["archived"]);
+
+    await lists.archiveCards(doing.id, alice);
+    for (const card of doingCards) expect(await types(card.id)).toEqual(["archived"]);
+    expect(await lists.archiveCards(doing.id, alice)).toEqual([]);
+
+    await archive.archiveDone(board.id, alice);
+    for (const card of doneCards) expect(await types(card.id)).toEqual(["archived"]);
+
+    const row = await prisma.card.findUniqueOrThrow({ where: { id: doneCards[1].id } });
+    const entry = await prisma.cardActivity.findFirstOrThrow({ where: { cardId: doneCards[1].id } });
+    expect(entry.at).toEqual(row.archivedAt);
+
+    await archive.restore(single.id, alice);
+    expect(await types(single.id)).toEqual(["restored", "archived"]);
+  });
+
   it("answers 404 when restoring to a list of another board, a live card or a missing card", async () => {
     const board = await newBoard(alice, "Strict");
     const other = await newBoard(alice, "Other");
