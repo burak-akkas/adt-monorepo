@@ -132,6 +132,85 @@ describe("CardsService", () => {
     expect(await order(bobs.lists[0].id)).toEqual([]);
   });
 
+  describe("activity", () => {
+    const log = async (cardId: string) => (await prisma.cardActivity.findMany({ where: { cardId } })).length;
+
+    it("records created, and moved with list ids only on a list change", async () => {
+      const board = await newBoard(alice, "Act move", ["From", "To"]);
+      const [from, to] = board.lists;
+      const card = await service.create(from.id, alice, { title: "c", priority: "medium" });
+      expect(card.activity).toMatchObject([{ type: "created" }]);
+      expect(card.activity[0]).not.toHaveProperty("from");
+
+      await service.move(card.id, alice, from.id, 0);
+      expect(await log(card.id)).toBe(1);
+
+      const moved = await service.move(card.id, alice, to.id, 0);
+      expect(moved.activity.map((a) => a.type)).toEqual(["moved", "created"]);
+      expect(moved.activity[0]).toMatchObject({ from: from.id, to: to.id });
+    });
+
+    it("records old/new values, omits empty sides, and logs notes without text, newest first", async () => {
+      const board = await newBoard(alice, "Act update", ["L"]);
+      const card = await service.create(board.lists[0].id, alice, { title: "Old", priority: "low" });
+      const updated = await service.update(card.id, alice, {
+        title: "New",
+        priority: "high",
+        dueDate: "2026-05-06",
+        notes: "some secret text",
+      });
+      expect(updated.activity.map((a) => a.type)).toEqual(["description", "dueDate", "priority", "title", "created"]);
+      const [description, dueDate, priority, title] = updated.activity;
+      expect(description).not.toHaveProperty("from");
+      expect(description).not.toHaveProperty("to");
+      expect(dueDate).toEqual(expect.objectContaining({ to: "2026-05-06" }));
+      expect(dueDate).not.toHaveProperty("from");
+      expect(priority).toMatchObject({ from: "low", to: "high" });
+      expect(title).toMatchObject({ from: "Old", to: "New" });
+
+      const cleared = await service.update(card.id, alice, { dueDate: null });
+      expect(cleared.activity[0]).toMatchObject({ type: "dueDate", from: "2026-05-06" });
+      expect(cleared.activity[0]).not.toHaveProperty("to");
+    });
+
+    it("writes nothing when nothing changed", async () => {
+      const board = await newBoard(alice, "Act noop", ["L"]);
+      const card = await service.create(board.lists[0].id, alice, { title: "Same", priority: "low", dueDate: "2026-01-01" });
+      await service.update(card.id, alice, {});
+      await service.update(card.id, alice, { title: "Same", priority: "low", dueDate: "2026-01-01", cover: "red" });
+      await service.update(card.id, alice, { notes: "" });
+      await service.update(card.id, alice, { notes: null });
+      expect(await log(card.id)).toBe(1);
+    });
+
+    it("keeps at most 50 entries, dropping the oldest", async () => {
+      const board = await newBoard(alice, "Act cap", ["L"]);
+      const card = await service.create(board.lists[0].id, alice, { title: "t0", priority: "low" });
+      for (let i = 1; i <= 55; i++) await service.update(card.id, alice, { title: `t${i}` });
+      expect(await log(card.id)).toBe(50);
+      const result = await service.get(card.id, alice);
+      expect(result.activity).toHaveLength(50);
+      expect(result.activity[0]).toMatchObject({ type: "title", to: "t55" });
+      expect(result.activity.at(-1)).toMatchObject({ type: "title", to: "t6" });
+    });
+
+    it("writes nothing for another user's card", async () => {
+      const board = await newBoard(alice, "Act owner", ["A", "B"]);
+      const card = await service.create(board.lists[0].id, alice, { title: "mine", priority: "low" });
+      await expect(service.update(card.id, bob, { title: "x" })).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.move(card.id, bob, board.lists[1].id, 0)).rejects.toBeInstanceOf(NotFoundException);
+      expect(await log(card.id)).toBe(1);
+    });
+
+    it("rolls the entry back with the change when the move fails", async () => {
+      const board = await newBoard(alice, "Act rollback", ["A"]);
+      const other = await newBoard(alice, "Act rollback 2", ["B"]);
+      const card = await service.create(board.lists[0].id, alice, { title: "mine", priority: "low" });
+      await expect(service.move(card.id, alice, other.lists[0].id, 0)).rejects.toBeInstanceOf(NotFoundException);
+      expect(await log(card.id)).toBe(1);
+    });
+  });
+
   it("answers 404 and changes nothing for another user's list or card", async () => {
     const board = await newBoard(alice, "Private", ["A", "B"]);
     const [a, b] = board.lists;
