@@ -2,10 +2,13 @@ import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Us
 import {
   createBoardRequestSchema,
   renameBoardRequestSchema,
+  updateBoardSettingsRequestSchema,
   type BoardDetail,
+  type BoardSettings,
   type BoardSummary,
   type CreateBoardRequest,
   type RenameBoardRequest,
+  type UpdateBoardSettingsRequest,
 } from "@adt/contracts";
 import { SessionGuard, UserId } from "../auth/session.guard.js";
 import { ZodValidationPipe } from "../common/zod-validation.pipe.js";
@@ -41,6 +44,15 @@ export class BoardsController {
     @Body(new ZodValidationPipe(renameBoardRequestSchema)) body: RenameBoardRequest,
   ): Promise<BoardSummary> {
     return this.boards.rename(id, userId, body.name);
+  }
+
+  @Patch(":id/settings")
+  updateSettings(
+    @UserId() userId: string,
+    @Param("id") id: string,
+    @Body(new ZodValidationPipe(updateBoardSettingsRequestSchema)) body: UpdateBoardSettingsRequest,
+  ): Promise<BoardSettings> {
+    return this.boards.updateSettings(id, userId, body);
   }
 
   @Post(":id/duplicate")

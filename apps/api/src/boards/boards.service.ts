@@ -1,10 +1,13 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import {
   DEFAULT_BOARD_NAME,
   DEFAULT_LIST_NAMES,
   MAX_BOARD_NAME_LENGTH,
+  type Background,
   type BoardDetail,
+  type BoardSettings,
   type BoardSummary,
+  type UpdateBoardSettingsRequest,
 } from "@adt/contracts";
 import { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
@@ -12,6 +15,7 @@ import { toCard } from "../cards/card.mapper.js";
 
 const boardWithContent = {
   lists: { orderBy: { position: "asc" }, include: { cards: { orderBy: { position: "asc" } } } },
+  formerLists: true,
 } satisfies Prisma.BoardInclude;
 
 type BoardRow = Prisma.BoardGetPayload<object>;
@@ -19,6 +23,22 @@ type BoardWithContent = Prisma.BoardGetPayload<{ include: typeof boardWithConten
 
 function toSummary(board: BoardRow): BoardSummary {
   return { id: board.id, name: board.name, createdAt: board.createdAt.toISOString(), updatedAt: board.updatedAt.toISOString() };
+}
+
+function toBackground(board: BoardRow): Background {
+  if (board.backgroundColor) return { type: "color", value: board.backgroundColor };
+  if (board.backgroundImageUrl) return { type: "image", url: board.backgroundImageUrl };
+  return null;
+}
+
+function toSettings(board: BoardRow, lists: { id: string; collapsed: boolean }[]): BoardSettings {
+  return {
+    background: toBackground(board),
+    view: board.view,
+    collapsedListIds: lists.filter((list) => list.collapsed).map((list) => list.id),
+    doingListId: board.doingListId,
+    doneListId: board.doneListId,
+  };
 }
 
 function toDetail(board: BoardWithContent): BoardDetail {
@@ -29,8 +49,12 @@ function toDetail(board: BoardWithContent): BoardDetail {
       boardId: list.boardId,
       name: list.name,
       position: list.position,
+      wipLimit: list.wipLimit,
+      collapsed: list.collapsed,
       cards: list.cards.map(toCard),
     })),
+    settings: toSettings(board, board.lists),
+    formerLists: Object.fromEntries(board.formerLists.map((former) => [former.listId, former.name])),
   };
 }
 
@@ -126,6 +150,43 @@ export class BoardsService {
     }
   }
 
+  /** Changes only the keys present in `update`; `null` clears. List ids must belong to the board. */
+  async updateSettings(id: string, userId: string, update: UpdateBoardSettingsRequest): Promise<BoardSettings> {
+    await this.findOwned(id, userId);
+    return this.prisma.$transaction(async (tx) => {
+      const board = await tx.board.findFirst({ where: { id, userId } });
+      if (!board) throw new NotFoundException("Board not found");
+      const lists = await tx.boardList.findMany({ where: { boardId: id }, select: { id: true } });
+      const own = new Set(lists.map((list) => list.id));
+      const collapsedIds = update.collapsedListIds === undefined ? undefined : [...new Set(update.collapsedListIds)];
+      for (const listId of [...(collapsedIds ?? []), update.doingListId, update.doneListId]) {
+        if (listId && !own.has(listId)) {
+          throw new BadRequestException("List does not belong to the board");
+        }
+      }
+
+      const data: Prisma.BoardUpdateInput = {};
+      if (update.background !== undefined) {
+        data.backgroundColor = update.background?.type === "color" ? update.background.value : null;
+        data.backgroundImageUrl = update.background?.type === "image" ? update.background.url : null;
+      }
+      if (update.view !== undefined) data.view = update.view;
+      if (update.doingListId !== undefined) {
+        data.doingList = update.doingListId === null ? { disconnect: true } : { connect: { id: update.doingListId } };
+      }
+      if (update.doneListId !== undefined) {
+        data.doneList = update.doneListId === null ? { disconnect: true } : { connect: { id: update.doneListId } };
+      }
+      if (collapsedIds !== undefined) {
+        await tx.boardList.updateMany({ where: { boardId: id }, data: { collapsed: false } });
+        await tx.boardList.updateMany({ where: { boardId: id, id: { in: collapsedIds } }, data: { collapsed: true } });
+      }
+      const updated = Object.keys(data).length > 0 ? await tx.board.update({ where: { id }, data }) : board;
+      const current = await tx.boardList.findMany({ where: { boardId: id }, orderBy: { position: "asc" } });
+      return toSettings(updated, current);
+    });
+  }
+
   async duplicate(id: string, userId: string): Promise<BoardSummary> {
     await this.findOwned(id, userId);
     for (let attempt = 0; ; attempt++) {
@@ -138,10 +199,15 @@ export class BoardsService {
             data: {
               userId,
               name: copyBoardName(source.name, boards.map((b) => b.name)),
+              backgroundColor: source.backgroundColor,
+              backgroundImageUrl: source.backgroundImageUrl,
+              view: source.view,
               lists: {
                 create: source.lists.map((list) => ({
                   name: list.name,
                   position: list.position,
+                  wipLimit: list.wipLimit,
+                  collapsed: list.collapsed,
                   cards: {
                     create: list.cards.map((card) => ({
                       title: card.title,
@@ -157,6 +223,20 @@ export class BoardsService {
               },
             },
           });
+          // The copied lists have new ids: map the chosen insights lists over by position.
+          if (source.doingListId || source.doneListId) {
+            const copied = await tx.boardList.findMany({ where: { boardId: copy.id }, orderBy: { position: "asc" } });
+            const mapped = (chosen: string | null) => {
+              const index = source.lists.findIndex((list) => list.id === chosen);
+              return index === -1 ? null : (copied[index]?.id ?? null);
+            };
+            return toSummary(
+              await tx.board.update({
+                where: { id: copy.id },
+                data: { doingListId: mapped(source.doingListId), doneListId: mapped(source.doneListId) },
+              }),
+            );
+          }
           return toSummary(copy);
         });
       } catch (error) {

@@ -18,6 +18,8 @@ export const listResponseSchema = z.object({
   boardId: z.string(),
   name: z.string(),
   position: z.number().int(),
+  wipLimit: z.number().int().nullable(),
+  collapsed: z.boolean(),
 });
 
 export const listWithCardsSchema = listResponseSchema.extend({ cards: z.array(cardResponseSchema) });

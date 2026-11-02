@@ -105,6 +105,16 @@ model Board {
   updatedAt DateTime    @default(now()) @updatedAt
   lists     BoardList[]
 
+  backgroundColor    String?
+  backgroundImageUrl String?
+  view               BoardView         @default(board)
+  // The lists chosen for insights. Deleting a list clears the choice.
+  doingListId        String?
+  doingList          BoardList?        @relation("BoardDoingList", fields: [doingListId], references: [id], onDelete: SetNull)
+  doneListId         String?
+  doneList           BoardList?        @relation("BoardDoneList", fields: [doneListId], references: [id], onDelete: SetNull)
+  formerLists        BoardFormerList[]
+
   @@index([userId])
   @@map("board")
 }
@@ -118,9 +128,32 @@ model BoardList {
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
   cards     Card[]
+  // 1..99, null = no limit
+  wipLimit  Int?
+  collapsed Boolean  @default(false)
+  doingOf   Board[]  @relation("BoardDoingList")
+  doneOf    Board[]  @relation("BoardDoneList")
 
   @@index([boardId, position])
   @@map("board_list")
+}
+
+enum BoardView {
+  board
+  calendar
+  table
+}
+
+// The last name of a deleted list, so activity entries that mention it stay readable.
+// No FK on listId: the list is gone by design.
+model BoardFormerList {
+  boardId String
+  board   Board  @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  listId  String
+  name    String
+
+  @@id([boardId, listId])
+  @@map("board_former_list")
 }
 
 model Card {

@@ -6,7 +6,14 @@ import { PrismaService } from "../prisma/prisma.service.js";
 type ListRow = Prisma.BoardListGetPayload<object>;
 
 function toResponse(list: ListRow): ListResponse {
-  return { id: list.id, boardId: list.boardId, name: list.name, position: list.position };
+  return {
+    id: list.id,
+    boardId: list.boardId,
+    name: list.name,
+    position: list.position,
+    wipLimit: list.wipLimit,
+    collapsed: list.collapsed,
+  };
 }
 
 function isUniqueViolation(error: unknown): boolean {
@@ -81,6 +88,12 @@ export class ListsService {
     }
   }
 
+  /** Sets the list's WIP limit; `null` removes it. */
+  async setWipLimit(id: string, userId: string, limit: number | null): Promise<ListResponse> {
+    await this.findOwnedList(this.prisma, id, userId);
+    return toResponse(await this.prisma.boardList.update({ where: { id }, data: { wipLimit: limit } }));
+  }
+
   /** Moves a list to `position` (clamped to the end) and returns the board's lists in order. */
   async move(id: string, userId: string, position: number): Promise<ListResponse[]> {
     return this.prisma.$transaction(async (tx) => {
@@ -121,6 +134,13 @@ export class ListsService {
         }
       }
 
+      // Keep the last name, so activity entries that mention the list stay readable. The limit, the collapsed flag
+      // and the insights choice go with the row (the FKs set the latter to null).
+      await tx.boardFormerList.upsert({
+        where: { boardId_listId: { boardId: list.boardId, listId: id } },
+        create: { boardId: list.boardId, listId: id, name: list.name },
+        update: { name: list.name },
+      });
       await tx.boardList.delete({ where: { id } });
       await this.renumber(tx, siblings.filter((l) => l.id !== id));
     });

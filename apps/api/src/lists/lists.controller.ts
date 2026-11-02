@@ -1,14 +1,16 @@
-import { Body, Controller, Delete, HttpCode, Inject, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, HttpCode, Inject, Param, Patch, Post, Put, Query, UseGuards } from "@nestjs/common";
 import {
   createListRequestSchema,
   deleteListQuerySchema,
   moveListRequestSchema,
   renameListRequestSchema,
+  wipLimitRequestSchema,
   type CreateListRequest,
   type DeleteListQuery,
   type ListResponse,
   type MoveListRequest,
   type RenameListRequest,
+  type WipLimitRequest,
 } from "@adt/contracts";
 import { SessionGuard, UserId } from "../auth/session.guard.js";
 import { ZodValidationPipe } from "../common/zod-validation.pipe.js";
@@ -45,6 +47,15 @@ export class ListsController {
     @Body(new ZodValidationPipe(moveListRequestSchema)) body: MoveListRequest,
   ): Promise<ListResponse[]> {
     return this.lists.move(id, userId, body.position);
+  }
+
+  @Put("lists/:id/wip-limit")
+  setWipLimit(
+    @UserId() userId: string,
+    @Param("id") id: string,
+    @Body(new ZodValidationPipe(wipLimitRequestSchema)) body: WipLimitRequest,
+  ): Promise<ListResponse> {
+    return this.lists.setWipLimit(id, userId, body.limit);
   }
 
   @Delete("lists/:id")

@@ -135,4 +135,45 @@ describe("ListsService", () => {
     await expect(service.rename("does-not-exist", alice, "x")).rejects.toBeInstanceOf(NotFoundException);
     expect(await order(board.id)).toEqual([["A", 0], ["B", 1]]);
   });
+
+  it("sets and clears a WIP limit", async () => {
+    const board = await newBoard(alice, "Wip", ["A"]);
+    const [a] = board.lists;
+    expect(a).toMatchObject({ wipLimit: null, collapsed: false });
+    await expect(service.setWipLimit(a.id, alice, 3)).resolves.toMatchObject({ wipLimit: 3 });
+    await expect(service.setWipLimit(a.id, alice, null)).resolves.toMatchObject({ wipLimit: null });
+  });
+
+  it("answers 404 and leaves another user's list limit unchanged", async () => {
+    const board = await newBoard(alice, "Wip private", ["A"]);
+    const [a] = board.lists;
+    await service.setWipLimit(a.id, alice, 5);
+    await expect(service.setWipLimit(a.id, bob, 1)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.setWipLimit("does-not-exist", alice, 1)).rejects.toBeInstanceOf(NotFoundException);
+    expect((await prisma.boardList.findUniqueOrThrow({ where: { id: a.id } })).wipLimit).toBe(5);
+  });
+
+  it("returns the limit and collapsed flag on create, rename and move", async () => {
+    const board = await newBoard(alice, "Shape", ["A"]);
+    const created = await service.create(board.id, alice, "B");
+    expect(created).toMatchObject({ wipLimit: null, collapsed: false });
+    expect(await service.rename(created.id, alice, "C")).toMatchObject({ wipLimit: null, collapsed: false });
+    expect((await service.move(created.id, alice, 0))[0]).toMatchObject({ wipLimit: null, collapsed: false });
+  });
+
+  it("on delete keeps the last name, drops the limit and clears the insights lists", async () => {
+    const board = await newBoard(alice, "Former", ["Keep", "Gone"]);
+    const [keep, gone] = board.lists;
+    await service.setWipLimit(gone.id, alice, 2);
+    await prisma.boardList.update({ where: { id: gone.id }, data: { collapsed: true } });
+    await prisma.board.update({ where: { id: board.id }, data: { doingListId: gone.id, doneListId: keep.id } });
+
+    await service.remove(gone.id, alice);
+
+    expect(await prisma.boardList.findUnique({ where: { id: gone.id } })).toBeNull();
+    const after = await prisma.board.findUniqueOrThrow({ where: { id: board.id }, include: { formerLists: true } });
+    expect(after.doingListId).toBeNull();
+    expect(after.doneListId).toBe(keep.id);
+    expect(after.formerLists).toEqual([{ boardId: board.id, listId: gone.id, name: "Gone" }]);
+  });
 });
