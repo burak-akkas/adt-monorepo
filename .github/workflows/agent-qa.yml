@@ -391,13 +391,25 @@ jobs:
           } > .agent-out/gallery.md
           gh pr comment "$PR" --body-file .agent-out/gallery.md
 
+      # Screenshots get their own artifact with the images at its top level: inside a bigger one they'd sit in
+      # .agent-out/, a folder that macOS and others hide after unzipping.
       - uses: actions/upload-artifact@v4
         id: artifact
         if: ${{ !cancelled() && steps.agent.outcome != 'skipped' }}
         with:
-          name: qa-pr-${{ github.event.pull_request.number }}-round-${{ steps.guard.outputs.round }}
+          name: qa-pr-${{ github.event.pull_request.number }}-round-${{ steps.guard.outputs.round }}-screenshots
           path: |
-            .agent-out/screenshots/
+            .agent-out/screenshots/*.png
+            .agent-out/screenshots/*.jpeg
+            .agent-out/screenshots/*.jpg
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && steps.agent.outcome != 'skipped' }}
+        with:
+          name: qa-pr-${{ github.event.pull_request.number }}-round-${{ steps.guard.outputs.round }}-e2e
+          path: |
             .agent-out/e2e-results.txt
             playwright-report/
           retention-days: 14

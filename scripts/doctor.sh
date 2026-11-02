@@ -62,6 +62,8 @@ for f in .github/agents/implementor.md .github/agents/reviewer.md .github/agents
 done
 if [ ${#missing[@]} -eq 0 ]; then ok "toolkit files are on \`$branch\`"
 else bad "missing on \`$branch\` (scripts/install.sh copies them): ${missing[*]}"; fi
+gh api "repos/$repo/contents/.github/ISSUE_TEMPLATE/agent-task.yml?ref=$branch" --silent 2>/dev/null \
+  || warn "no issue form on \`$branch\` (scripts/install.sh copies it): issues still work, without the form"
 
 # --- labels ---------------------------------------------------------------------------------------
 have=$(gh api --paginate "repos/$repo/labels?per_page=100" --jq '.[].name' 2>/dev/null)
