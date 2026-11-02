@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 
+import { AccountMenu } from "@/components/app/AccountMenu";
 import { BoardSwitcher } from "@/components/app/BoardSwitcher";
 import { KeyboardShortcuts } from "@/components/app/KeyboardShortcuts";
 import { SettingsPanel } from "@/components/panels/SettingsPanel";
@@ -44,6 +45,7 @@ export function TopBar() {
         <BoardSwitcher />
       </div>
       <div className="ml-auto flex items-center gap-1">
+        <AccountMenu />
         <KeyboardShortcuts />
         <SettingsButton />
       </div>
