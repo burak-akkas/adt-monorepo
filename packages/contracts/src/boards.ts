@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { listWithCardsSchema } from "./lists.js";
 import { boardSettingsSchema } from "./settings.js";
+import { templateResponseSchema } from "./templates.js";
 
 export const MAX_BOARD_NAME_LENGTH = 40;
 export const DEFAULT_BOARD_NAME = "My board";
@@ -23,6 +24,7 @@ export const boardDetailSchema = boardSummarySchema.extend({
   settings: boardSettingsSchema,
   // Last names of deleted lists, by list id.
   formerLists: z.record(z.string(), z.string()),
+  templates: z.array(templateResponseSchema),
 });
 
 export type CreateBoardRequest = z.infer<typeof createBoardRequestSchema>;
