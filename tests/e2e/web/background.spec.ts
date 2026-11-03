@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../support/fixtures";
 
 test("Settings sets a board background color, an image URL, and resets it", async ({ page }) => {
   await page.goto("./");

@@ -1,5 +1,6 @@
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { editCard } from "../../support/cardActions";
+import { expect, test } from "../../support/fixtures";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("./");

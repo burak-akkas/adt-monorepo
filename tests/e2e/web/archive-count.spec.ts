@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../support/fixtures";
 import { moveCardTo } from "../../support/cardActions";
 
 test("shows the archived card count inside the panel and keeps it updated", async ({ page }) => {

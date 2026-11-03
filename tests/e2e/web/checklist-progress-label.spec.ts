@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../support/fixtures";
 
 test("checklist heading shows an 'N/M done' label that updates live", async ({ page }) => {
   await page.goto("./");
