@@ -1,15 +1,32 @@
 # Agent tooling
 
-The scripts the agent workflows call (`.github/workflows/agent-*.yml`). They are moving from bash to
-Python, one group at a time, into the `agentflow` package. A migrated script stays as a 4-line `.sh`
-wrapper with the same name, arguments and output, so no workflow changes:
+Everything the agent workflows (`.github/workflows/agent-*.yml`) run besides the agents themselves, as
+one Python package, `agentflow`, with one entry point:
 
-```sh
-exec python3 -I "$(dirname "$0")/agentflow" transition "$@"
+```bash
+scripts/agents/agent.sh <command> [args]
 ```
 
-`-I` keeps `PYTHON*` variables and user site-packages out. The package uses only the standard
-library (Python 3.10+, which every GitHub runner has) and talks to GitHub through the `gh` CLI.
+```bash
+scripts/agents/agent.sh --help
+```
+
+`agent.sh` only runs `python3 -I scripts/agents/agentflow "$@"` (`-I` keeps `PYTHON*` variables and
+user site-packages out, so only this code runs). The package uses only the standard library (Python
+3.10+, which every GitHub runner has) and talks to GitHub through the `gh` CLI. Exit codes: 0 done,
+1 failed (or "no", for the yes/no commands below), 2 wrong usage, 3 `pr-paths` couldn't decide.
+
+## Commands
+
+| Group | Commands |
+|---|---|
+| States and the progress log | `transition`, `progress`, `count-comments`, `url`, `branch-head` |
+| The issue pipeline | `lead-budget`, `split-mode`, `split`, `subissues`, `release-blocked` |
+| Conflict avoidance | `overlap`, `release-waiting` |
+| Review and approvals | `approve`, `approved-sha`, `qa-passed`, `own-diff`, `same-own-changes`, `clean-base-update`, `pr-paths`, `pr-still-current` |
+| The merge queue | `queue`, `queue-tidy`, `sweep-conflicts`, `integrate` |
+| Operations | `watchdog`, `production-check`, `app-token`, `publish-pages` |
+| Setting a repository up (run by a person) | `setup-labels <owner/repo>`, `doctor <owner/repo>` |
 
 ## Layers
 
@@ -17,31 +34,34 @@ Each module uses only the ones above it:
 
 | Module | What it holds |
 |---|---|
-| `model` | Plain immutable records: `Issue`, `Comment`, `LabelEvent` |
-| `config` | `Settings` from the environment (`GITHUB_REPOSITORY`, `AGENT_BOT_ID`, …) and variable parsing |
-| `github` | The `GitHub` interface, and `GhCli`, which implements it with `gh` (so the simulator's fake `gh` works unchanged) |
+| `model` | Plain immutable records: `Issue`, `PullRequest`, `Comment`, `Commit`, `Check`, … |
+| `config` | `Settings` from the environment (`GITHUB_REPOSITORY`, `AGENT_BOT_ID`, …), variable parsing, link templates |
+| `clock` | Time, behind an interface: `date +%s` and `sleep`, so the simulator's virtual clock drives the code |
+| `github` | The `GitHub` interface, and `GhCli`, which implements it with `gh` |
 | `markers` | The `<!-- agent:… -->` handoff markers: only the bot's comments count, newest wins |
+| `labels` | Every label the team uses (`setup-labels` creates them, `doctor` checks them) |
 | `states` | `transition` (an item's one `agent:*` label) and `progress` (the issue's progress comment) |
-| `clock` | Time, behind an interface (sleeps run `sleep`, so the simulator's instant one applies) |
 | `issues` | The issue pipeline: Lead budget, split mode, splitting, advancing split issues, waiting for other issues |
 | `prs` | Review and approvals: the approved commit, QA passes, a PR's own edits, clean base updates, path rules, the guard before a Reviewer/QA run |
 | `queue` | The merge queue's order, tidying it, and sending PRs that conflict after a merge back |
 | `overlap` | Conflict avoidance: in-flight work on the same files, and starting issues that waited for it |
-| `cli` | One command per former script |
+| `integrator` | The Integrator's work on one queued PR: approval, update, checks, QA hold, merge |
+| `watchdog`, `production`, `tokens`, `pages`, `doctor` | Operations: stalled work, the production check, App tokens, gh-pages, setup checks |
+| `cli` | The commands |
 
 ## Tests, first
 
-A migration step always starts with tests, then the code:
+Every change starts with tests, then the code:
 
 1. **Unit tests** (`tests/`): the behaviour, including failures. `tests/support.py`'s `Repo` is the
    real `GhCli` answered by the simulator's fake `gh` (`scripts/sim/fakegh/gh`), so there is one
    fake to maintain, and the tests check the exact `gh` calls too. When the code needs a call the
-   fake can't answer, extend the fake. About half a minute.
-2. **Parity tests** (`scripts/sim/test_parity.py`): the bash version (from git history) and the
-   Python version run on the same fake repository and must do the same. Anything changed on purpose
-   is listed with the reason.
+   fake can't answer, extend the fake.
+2. **Parity tests** (`scripts/sim/test_parity.py`): the commands that replaced bash scripts run on
+   the same fake repository as those scripts did (from git history, `PARITY_REF`) and must do the
+   same. Anything changed on purpose is listed per case, with the reason.
 3. **The simulator** (`scripts/sim`): the scenarios, the issue-pipeline simulation and the matrix run
-   the real workflow steps, which now call the Python code through the wrappers.
+   the real workflow steps, which call these commands.
 
 ```bash
 python3 -m unittest discover -s scripts/agents/tests -t scripts/agents
@@ -57,18 +77,7 @@ Lint and types, from `scripts/agents` (settings in `pyproject.toml`; CI pins the
 ruff check . && ruff format --check . && mypy agentflow tests
 ```
 
-## Migration status
-
-| Group | Scripts | State |
-|---|---|---|
-| Core and issue pipeline | `transition`, `progress`, `count-comments`, `url`, `branch-head`, `lead-budget`, `split-mode`, `release-blocked`, `subissues`, `split` | Python |
-| Conflict avoidance | `overlap`, `release-waiting` | Python |
-| Review and approvals | `approve`, `approved-sha`, `qa-passed`, `own-diff`, `same-own-changes`, `pr-still-current`, `pr-paths`, `clean-base-update` | Python |
-| Merge queue | `queue`, `queue-tidy`, `sweep-conflicts` | Python |
-| Merge queue | `integrate` | bash |
-| Operations | `watchdog`, `production-check`, `app-token`, `publish-pages` | bash |
-
-Behaviour changed on purpose in the migration:
+## Changed on purpose when the scripts moved from bash
 
 - An issue closed without a reason, or as a duplicate, counts as done for whatever waits for it.
   Bash knew only `completed` and `not_planned`, so a parent or a parked issue could wait forever.
@@ -77,3 +86,9 @@ Behaviour changed on purpose in the migration:
   variable, so it never reached the log.
 - `release-waiting` no longer ends its list of PRs with a space ("Expect conflicts with #201 ." in the comment).
 - `sweep-conflicts` looks at up to 100 open PRs (bash's `gh pr list` stopped at 30).
+- `integrate`: an API error while checking mergeability or how far behind the base a PR is sends it to
+  the back of the queue. In bash a failed command inside `[ … ]` didn't trip the error trap, so it
+  read as "not conflicting" or "not behind". The protected paths (`AGENT_PROTECTED_PATHS`) are plain
+  prefixes; bash used them as regular expressions.
+- `watchdog --dry-run` prints `would run: transition 7 agent:ready` instead of a script path.
+- `publish-pages` copies with Python instead of `rsync`.

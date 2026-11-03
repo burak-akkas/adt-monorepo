@@ -110,7 +110,7 @@ class Flow:
         return n
 
     def sub_issue(self, n, parent, depends="", labels=()):
-        """An issue split.sh created: the bot opened it, with the sub-issue marker."""
+        """An issue agent.sh split created: the bot opened it, with the sub-issue marker."""
         return self.issue(n, labels, author=BOT, body="Part of #%s.\n\n<!-- agent:sub-issue parent=%s depends=%s -->" % (parent, parent, depends))
 
     def say(self, n, body, user=BOT):
@@ -119,7 +119,7 @@ class Flow:
         self.st["items"][str(n)]["comments"].append(c["id"])
 
     def label(self, n, name, only=False):
-        """A human (or GitHub) applies a label; only=True replaces the agent:* state like transition.sh."""
+        """A human (or GitHub) applies a label; only=True replaces the agent:* state like agent.sh transition."""
         it = self.st["items"][str(n)]
         if only:
             it["labels"] = [l for l in it["labels"] if not l.startswith("agent:")]

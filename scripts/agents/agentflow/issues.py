@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from agentflow import markers
+from agentflow import labels, markers
 from agentflow.config import Settings
 from agentflow.github import GhError, GitHub
 from agentflow.model import Issue
@@ -111,8 +111,7 @@ def split(gh: GitHub, s: Settings, parent: int, plan: Mapping[str, Any], max_sub
     The parent waits in `agent:split` and closes when they are all done.
     """
     subtasks = _check_plan(plan, max_subissues)
-    gh.create_label("agent:split", "bfdadc", "Split into sub-issues; closes when all are done")
-    gh.create_label("agent:blocked", "e4e669", "Waiting for the issues it depends on; starts when they close")
+    labels.ensure(gh, "agent:split", "agent:blocked")
     out: list[str] = []
     created: list[int] = []
     rows: list[str] = []

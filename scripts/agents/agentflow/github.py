@@ -15,13 +15,18 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
-from agentflow.model import Comment, Commit, FileChange, Issue, LabelEvent, PullRequest
+from agentflow.model import Check, Comment, Commit, FileChange, Issue, LabelEvent, PullRequest, Run
 
 Runner = Callable[[list[str], "str | None"], str]
 
 
 class GhError(Exception):
-    """A `gh` call failed (API error, network, missing item)."""
+    """A `gh` call failed (API error, network, missing item). `stdout` keeps what it printed anyway:
+    `gh pr checks` exits non-zero while checks are pending or failing, and still prints them."""
+
+    def __init__(self, message: str, stdout: str = "") -> None:
+        super().__init__(message)
+        self.stdout = stdout
 
 
 class GitHub(ABC):
@@ -83,8 +88,8 @@ class GitHub(ABC):
         """MERGEABLE, CONFLICTING or UNKNOWN (GitHub computes it lazily: retry UNKNOWN)."""
 
     @abstractmethod
-    def prs(self, state: str = "open", label: str | None = None, base: str | None = None) -> list[PullRequest]:
-        """Pull requests by state ("open" or "all"), optionally with a label or a base branch."""
+    def prs(self, state: str = "open", label: str | None = None, base: str | None = None, head: str | None = None) -> list[PullRequest]:
+        """Pull requests by state ("open" or "all"), optionally with a label, a base or a head branch."""
 
     @abstractmethod
     def pr_files(self, number: int) -> list[str]:
@@ -106,8 +111,28 @@ class GitHub(ABC):
         """Every open issue and PR (PRs with is_draft set)."""
 
     @abstractmethod
-    def run_titles(self, workflow: str, status: str) -> list[str]:
-        """Titles of a workflow's runs in a status (queued, in_progress, …); run titles are the item's title."""
+    def runs(self, status: str, workflow_file: str | None = None) -> list[Run]:
+        """Workflow runs in a status (queued, in_progress, …), of one workflow file or all of them."""
+
+    @abstractmethod
+    def behind_by(self, sha: str, base: str) -> int:
+        """How many commits of `base` are missing from `sha`."""
+
+    @abstractmethod
+    def pr_checks(self, number: int) -> list[Check]: ...
+
+    @abstractmethod
+    def branch_head(self, branch: str) -> str:
+        """The commit a branch points to."""
+
+    @abstractmethod
+    def update_branch(self, number: int, expected_head: str) -> None:
+        """Merges the base into the PR (GitHub's update-branch); fails if the head moved or GitHub refuses."""
+
+    @abstractmethod
+    def merge(self, number: int, method: str, head: str) -> str:
+        """Merges the PR at exactly `head` (and deletes the branch). Returns gh's error output, "" if none.
+        Never raises: gh can report an error after the merge itself succeeded, so callers check the state."""
 
 
 def run_gh(args: list[str], stdin: str | None = None) -> str:
@@ -116,7 +141,7 @@ def run_gh(args: list[str], stdin: str | None = None) -> str:
     except OSError as e:
         raise GhError(f"cannot run gh: {e}") from e
     if p.returncode != 0:
-        raise GhError(p.stderr.strip() or f"gh {' '.join(args[:3])} exited with {p.returncode}")
+        raise GhError(p.stderr.strip() or f"gh {' '.join(args[:3])} exited with {p.returncode}", p.stdout)
     return p.stdout
 
 
@@ -132,6 +157,7 @@ def _issue(data: dict[str, Any]) -> Issue:
         labels=tuple(label["name"] for label in data.get("labels") or []),
         is_pr=data.get("pull_request") is not None,  # GitHub sends an object for PRs; any object, even {}, means a PR
         is_draft=bool(data.get("draft")),
+        updated_at=data.get("updated_at") or "",
     )
 
 
@@ -154,6 +180,22 @@ class GhCli(GitHub):
     def _pages(self, path: str) -> list[dict[str, Any]]:
         pages = self._json(["api", "--paginate", "--slurp", path]) or []
         return [item for page in pages for item in page]
+
+    # --- generic reads, for one-off tools (scripts/agents/agentflow/doctor.py) ------------------------
+    def read(self, path: str) -> Any:
+        """GET repos/<repo>/<path> (or another API path starting with "user/" …), as JSON."""
+        if path.startswith(("user/", "users/")):
+            return self._json(["api", path])
+        return self._json(["api", self._path(path) if path else f"repos/{self.repo}"])
+
+    def read_list(self, path: str, key: str) -> list[Any]:
+        """All pages of a listing whose items sit under `key` (e.g. actions/variables -> "variables")."""
+        pages = self._json(["api", "--paginate", "--slurp", self._path(path)]) or []
+        return [item for page in pages for item in (page.get(key) or [] if isinstance(page, dict) else page)]
+
+    def read_raw(self, path: str) -> str:
+        """A file's raw contents through the contents API."""
+        return self._run(["api", self._path(path), "-H", "Accept: application/vnd.github.raw"], None)
 
     # --- reads ---------------------------------------------------------------------------------
     def issue(self, number: int) -> Issue:
@@ -243,12 +285,11 @@ class GhCli(GitHub):
     def pr_mergeable(self, number: int) -> str:
         return str((self._json(["pr", "view", str(number), "-R", self.repo, "--json", "mergeable"]) or {}).get("mergeable") or "UNKNOWN")
 
-    def prs(self, state: str = "open", label: str | None = None, base: str | None = None) -> list[PullRequest]:
+    def prs(self, state: str = "open", label: str | None = None, base: str | None = None, head: str | None = None) -> list[PullRequest]:
         args = ["pr", "list", "-R", self.repo, "--state", state, "--limit", "100", "--json", self.PR_FIELDS]
-        if label:
-            args += ["--label", label]
-        if base:
-            args += ["--base", base]
+        for flag, value in (("--label", label), ("--base", base), ("--head", head)):
+            if value:
+                args += [flag, value]
         return [self._pull(d) for d in self._json(args) or []]
 
     def pr_files(self, number: int) -> list[str]:
@@ -285,6 +326,36 @@ class GhCli(GitHub):
     def open_items(self) -> list[Issue]:
         return [_issue(d) for d in self._pages(self._path("issues") + "?state=open&per_page=100")]
 
-    def run_titles(self, workflow: str, status: str) -> list[str]:
-        rows = self._json(["run", "list", "-R", self.repo, "--workflow", workflow, "--status", status, "--limit", "50", "--json", "displayTitle"])
-        return [str(r.get("displayTitle") or "") for r in rows or []]
+    def runs(self, status: str, workflow_file: str | None = None) -> list[Run]:
+        args = ["run", "list", "-R", self.repo, "--status", status, "--limit", "100", "--json", "name,displayTitle"]
+        if workflow_file:
+            args += ["--workflow", workflow_file]
+        return [Run(workflow=str(r.get("name") or ""), title=str(r.get("displayTitle") or "")) for r in self._json(args) or []]
+
+    def behind_by(self, sha: str, base: str) -> int:
+        return int(self._compare(sha, base).get("ahead_by") or 0)
+
+    def pr_checks(self, number: int) -> list[Check]:
+        args = ["pr", "checks", str(number), "-R", self.repo, "--json", "workflow,name,bucket,link"]
+        try:
+            out = self._run(args, None)
+        except GhError as e:
+            out = e.stdout  # non-zero while checks are pending or failing, with the checks on stdout
+        try:
+            rows = json.loads(out) if out.strip() else []
+        except json.JSONDecodeError:
+            rows = []
+        return [Check(str(r.get("workflow") or ""), str(r.get("name") or ""), str(r.get("bucket") or ""), str(r.get("link") or "")) for r in rows]
+
+    def branch_head(self, branch: str) -> str:
+        return str(((self._json(["api", self._path("branches", branch)]) or {}).get("commit") or {}).get("sha") or "")
+
+    def update_branch(self, number: int, expected_head: str) -> None:
+        self._run(["api", "-X", "PUT", self._path("pulls", number, "update-branch"), "-f", f"expected_head_sha={expected_head}"], None)
+
+    def merge(self, number: int, method: str, head: str) -> str:
+        try:
+            self._run(["pr", "merge", str(number), "-R", self.repo, f"--{method}", "--delete-branch", "--match-head-commit", head], None)
+        except GhError as e:
+            return str(e)
+        return ""

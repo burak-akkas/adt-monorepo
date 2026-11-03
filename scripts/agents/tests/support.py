@@ -99,10 +99,14 @@ class Repo(GhCli):
         state: str = "OPEN",
         draft: bool = False,
         head_ref: str = "",
-        mergeable: tuple[str, ...] = ("MERGEABLE",),
+        mergeable: tuple[str, ...] = (),
         files: tuple[str, ...] = (),
         issue: int | None = None,
+        conflict: bool = False,
+        merge_fails: int = 0,
     ) -> int:
+        """A pull request. `mergeable` scripts GitHub's answers in order (the last repeats); without it,
+        the PR is MERGEABLE, or CONFLICTING with `conflict`. `merge_fails` merges fail before one works."""
         head = head or sha(0x10000 + number)
         with self._edit() as st:
             st["shas"].setdefault(
@@ -119,6 +123,8 @@ class Repo(GhCli):
                 "branch": head_ref or f"agent/issue-{number}",
                 "mergeable_plan": list(mergeable),
                 "issue": issue,
+                "conflict": conflict,
+                "merge_fails": merge_fails,
             }
             self._label(st, number, labels)
         return number
@@ -183,6 +189,31 @@ class Repo(GhCli):
         with self._edit() as st:
             st.setdefault("active_runs", []).append({"workflow": workflow, "status": status, "name": "Agent · x", "displayTitle": title})
 
+    def checks(self, outcome: str, sha: str | None = None) -> None:
+        """The required check's outcome on a commit (on every commit without `sha`): pass, fail, hang
+        (pending forever), none (never reports) or slow:N (pending for N polls, then pass)."""
+        with self._edit() as st:
+            if sha:
+                st.setdefault("checks", {})[sha] = outcome
+            else:
+                st["default_checks"] = outcome
+
+    def base_moves(self, commits: int = 1) -> None:
+        """Someone merges into the base branch: every PR is behind by that much more."""
+        with self._edit() as st:
+            st["base_version"] += commits
+
+    def base_changes_workflows(self) -> None:
+        """The base gets workflow changes: GitHub refuses to update older PR branches for the App."""
+        with self._edit() as st:
+            st["base_version"] += 1
+            st["workflow_version"] = st["base_version"]
+
+    def set(self, number: int, **fields: Any) -> None:
+        """Sets fields of an item in the fake (e.g. conflict=True, state="MERGED")."""
+        with self._edit() as st:
+            st["items"][str(number)].update(fields)
+
     def fail(self, *calls: str) -> None:
         """The next `gh` call containing each of these fails once (e.g. "issues/7/labels")."""
         with self._edit() as st:
@@ -219,6 +250,16 @@ class Repo(GhCli):
 
     def sub_issues(self, number: int) -> list[int]:
         return list(self._item(number).get("sub_issues", []))
+
+    def merged(self) -> list[int]:
+        return list(self._load().get("merged", []))
+
+    def head(self, number: int) -> str:
+        return str(self._item(number)["head"])
+
+    def violations(self) -> list[dict[str, Any]]:
+        """Merges the fake audited as unsafe (not up to date, not green, not the approved commit…)."""
+        return list(self._load().get("violations", []))
 
     def numbers(self) -> list[int]:
         return sorted(int(n) for n in self._load()["items"])

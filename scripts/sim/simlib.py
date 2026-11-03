@@ -119,6 +119,16 @@ def drain_script(repo=REPO):
     return next(s["run"] for s in workflow("agent-integrator.yml", repo)["jobs"]["integrate"]["steps"] if "run" in s)
 
 
+def command(bin_dir, script, args=()):
+    """How to run one of the agent tooling's commands: through the single entry point
+    (scripts/agents/agent.sh <command>), or, for an older checkout from before it (legacy profiles,
+    parity tests), its own script (<command>.sh)."""
+    name = script[:-3] if script.endswith(".sh") else script
+    if os.path.exists(os.path.join(bin_dir, "agent.sh")):
+        return [os.path.join(bin_dir, "agent.sh"), name, *map(str, args)]
+    return [os.path.join(bin_dir, name + ".sh"), *map(str, args)]
+
+
 def run(st, script=None, args=(), shell=None, bin_dir=None, **envx):
     """Run a script from scripts/agents (script + args), or a shell snippet (shell=...), or the Integrator's
     drain loop (neither), against state st. Returns the final state with _stdout/_stderr/_rc/_summary/_outputs."""
@@ -132,7 +142,7 @@ def run(st, script=None, args=(), shell=None, bin_dir=None, **envx):
     e = env_for(f, bin_dir, GITHUB_STEP_SUMMARY=summary, GITHUB_OUTPUT=outputs, **envx)
     os.makedirs(os.path.join(d, "ws", ".agent-out"), exist_ok=True)
     if script:
-        cmd = [os.path.join(e["BIN"], script), *args]
+        cmd = command(e["BIN"], script, args)
     else:
         cmd = ["bash", "-eo", "pipefail", "-c", shell if shell is not None else drain_script()]
     r = subprocess.run(cmd, env=e, capture_output=True, text=True, cwd=os.path.join(d, "ws"), timeout=600)

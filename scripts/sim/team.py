@@ -83,7 +83,7 @@ class Team:
         # An older ref with the merge queue runs like the current code; one without it, with its merge gate.
         self.legacy = bool(legacy_dir) and not os.path.exists(os.path.join(legacy_dir, ".github/workflows/agent-integrator.yml"))
         self.bin = os.path.join(self.repo, "scripts/agents")
-        self.qa_in_queue_code = os.path.exists(os.path.join(self.bin, "qa-passed.sh"))
+        self.qa_in_queue_code = any(os.path.exists(os.path.join(self.bin, f)) for f in ("agent.sh", "qa-passed.sh"))
         self.reviewer_steps = simlib.steps("agent-reviewer.yml", "review", self.repo)
         self.merge_steps = simlib.steps("agent-merge.yml", "merge", self.repo)
         self.drain = None if self.legacy else simlib.drain_script(self.repo)
@@ -152,7 +152,7 @@ class Team:
         out = os.path.join(d, "outputs")
         open(out, "w").close()
         e = self.env(job, dict(extra or {}, GITHUB_OUTPUT=out, GITHUB_STEP_SUMMARY=os.path.join(d, "summary")))
-        cmd = ["bash", "-eo", "pipefail", "-c", shell] if shell is not None else [os.path.join(self.bin, script), *args]
+        cmd = ["bash", "-eo", "pipefail", "-c", shell] if shell is not None else simlib.command(self.bin, script, args)
         p = subprocess.Popen(cmd, env=e, cwd=d, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         job.procs.append(p)
         try:
@@ -194,7 +194,7 @@ class Team:
                 extra=dict(env, OUT=json.dumps({"verdict": verdict})))
 
     def qa(self, job, n, head):
-        so, _ = self.sh(job, "pr-still-current.sh", [n, head, "agent:qa"])
+        so, _ = self.sh(job, "pr-still-current", [n, head, "agent:qa"])
         if so.strip():
             return
         self.stats["qa"] += 1
@@ -203,18 +203,18 @@ class Team:
         mine = [c["body"] for c in st["comments_all"] if c["id"] in st["items"][n]["comments"]]
         last_lead = max([i for i, b in enumerate(mine) if "<!-- agent:lead -->" in b] or [-1])
         if sum(1 for b in mine[last_lead + 1:] if "<!-- agent:qa -->" in b and "Verdict:** fail" in b) >= 3:
-            self.sh(job, "transition.sh", [n, "agent:needs-decision"])
+            self.sh(job, "transition", [n, "agent:needs-decision"])
             return
         ok = self.rng.random() < self.p["qa_ok"]
         self.comment(n, "<!-- agent:qa -->\n**Verdict:** %s" % ("pass" if ok else "fail"))
         if ok:
-            self.sh(job, "approve.sh", [n, head, "qa"])
+            self.sh(job, "approve", [n, head, "qa"])
         else:
-            self.sh(job, "transition.sh", [n, "agent:changes-requested"])
+            self.sh(job, "transition", [n, "agent:changes-requested"])
 
     def implementor(self, job, n):
         self.stats["impl"] += 1
-        self.sh(job, "transition.sh", [n, "agent:fixing"])   # Prepare: agent:changes-requested -> agent:fixing
+        self.sh(job, "transition", [n, "agent:fixing"])   # Prepare: agent:changes-requested -> agent:fixing
         self.work()   # agent:fixing while the Implementor works (the window the sweep must respect)
         blocked = self.rng.random() < self.p["impl_blocked"]
         nothing_to_do = False
@@ -243,9 +243,9 @@ class Team:
         if nothing_to_do:
             self.count("impl_nochange")
         if blocked or nothing_to_do:
-            self.sh(job, "transition.sh", [n, "agent:needs-decision"])
+            self.sh(job, "transition", [n, "agent:needs-decision"])
         elif "agent:fixing" in read(self.f)["items"][n]["labels"]:   # Apply: pushed, clear agent:fixing only
-            self.sh(job, "transition.sh", [n])
+            self.sh(job, "transition", [n])
 
     def lead(self, job, n):
         self.stats["lead"] += 1
@@ -253,15 +253,15 @@ class Team:
         st = read(self.f)
         used = sum(1 for c in st["comments_all"] if c["id"] in st["items"][n]["comments"] and "<!-- agent:lead -->" in c["body"])
         if used >= 3:
-            self.sh(job, "transition.sh", [n, "agent:needs-human"])
+            self.sh(job, "transition", [n, "agent:needs-human"])
             return
         self.comment(n, "<!-- agent:lead -->\n## 🧭 Lead decision")
         st = read(self.f)
         it = st["items"][n]
         if it.get("conflict") or self.rng.random() < self.p["lead_fix"]:
-            self.sh(job, "transition.sh", [n, "agent:changes-requested"])
+            self.sh(job, "transition", [n, "agent:changes-requested"])
         else:
-            self.sh(job, "approve.sh", [n, it["head"], "lead"])
+            self.sh(job, "approve", [n, it["head"], "lead"])
 
     def merge_gate(self, job, n, head, sender):
         if self.legacy:
@@ -296,7 +296,7 @@ class Team:
 
     def watchdog(self, job):
         self.stats["watchdog_runs"] += 1
-        so, _ = self.sh(job, "watchdog.sh", [])
+        so, _ = self.sh(job, "watchdog", [])
         if "restarting" in so:
             self.stats["watchdog_kicks"] += 1
 

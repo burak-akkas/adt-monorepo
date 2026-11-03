@@ -65,7 +65,7 @@ def _implementor_busy(gh: GitHub, title: str) -> bool:
     """Is an Implementor run queued or running for this PR (run titles are the PR's title)?"""
     for status in RUN_STATES:
         try:
-            if title in gh.run_titles("agent-implementor.yml", status):
+            if any(r.title == title for r in gh.runs(status, "agent-implementor.yml")):
                 return True
         except GhError:
             continue

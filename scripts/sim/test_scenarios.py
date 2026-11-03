@@ -59,7 +59,7 @@ def queue_sh_lists_integrating_first_then_oldest():
         106: {"head": sha(0xf1), "labels": ["agent:integrating"], "comments": [queued()]},
         107: {"head": sha(0xf2), "labels": ["agent:review"]},
         108: {"head": sha(0xf3), "draft": True, "comments": [queued()]},
-    }), script="queue.sh")
+    }), script="queue")
     assert st["_stdout"].split("\n")[:3] == ["106 integrating", "105 queued", "104 queued"], st["_stdout"]
     assert "108" not in st["_stdout"]
 
@@ -191,24 +191,24 @@ def the_sweep_leaves_a_pr_alone_while_the_implementor_works_on_it():
     assert labels(st2, 102) == ["agent:changes-requested"] and labels(st2, 103) == [], (labels(st2, 102), labels(st2, 103))
     st["active_runs"] = []   # without a run working on it, it is flagged as before
     st["items"]["103"]["conflict"] = True
-    st = run(st, script="sweep-conflicts.sh", args=["101", "sandbox"])
+    st = run(st, script="sweep-conflicts", args=["101", "sandbox"])
     assert labels(st, 103) == ["agent:changes-requested"]
 
 
 @test
 def draft_leaves_the_queue():
     st = run(make_state({101: {"head": sha(0xa1), "draft": True, "comments": [approval(sha(0xa1)), queued()]}}),
-             script="integrate.sh", args=["101"])
+             script="integrate", args=["101"])
     assert labels(st, 101) == [] and st["_stdout"].strip().endswith("result=left")
 
 
 @test
 def removed_label_and_closed_pr_are_left_alone():
     st = run(make_state({101: {"head": sha(0xa1), "labels": [], "comments": [approval(sha(0xa1)), queued()]}}),
-             script="integrate.sh", args=["101"])
+             script="integrate", args=["101"])
     assert st["_stdout"].strip() == "result=left" and labels(st, 101) == []
     st = run(make_state({101: {"head": sha(0xa1), "state": "CLOSED", "comments": [approval(sha(0xa1)), queued()]}}),
-             script="integrate.sh", args=["101"])
+             script="integrate", args=["101"])
     assert st["_stdout"].strip() == "result=left"
 
 
@@ -258,7 +258,7 @@ def queue_labels_on_closed_prs_are_tidied():
         103: {"head": sha(0xc1), "state": "CLOSED", "labels": ["agent:approved"]},
         104: {"head": sha(0xd1), "labels": ["agent:queued"]},
     })
-    st = run(st, script="queue-tidy.sh")
+    st = run(st, script="queue-tidy")
     assert labels(st, 101) == labels(st, 102) == ["agent:done"] and labels(st, 103) == [] and labels(st, 104) == ["agent:queued"]
 
 
@@ -406,7 +406,7 @@ def qa_in_queue_respects_lead_and_human_approvals():
 
 @test
 def a_left_over_integrating_label_is_no_qa_pass():
-    # Found by the matrix (API errors): a failed label read in transition.sh left agent:integrating next
+    # Found by the matrix (API errors): a failed label read in agent.sh transition left agent:integrating next
     # to agent:qa, and the hold took it for QA's pass and merged untested code.
     st = make_state({101: {"head": sha(0xa1), "comments": [approval(sha(0xa1), "reviewer"), queued()]}})
     st["hooks"] = [{"match": "pr view 101", "pr": 101, "if_label": "agent:qa", "labels": ["agent:integrating", "agent:qa"]}]
@@ -417,7 +417,7 @@ def a_left_over_integrating_label_is_no_qa_pass():
 @test
 def transition_fails_instead_of_keeping_the_old_state():
     st = make_state({101: {"head": sha(0xa1), "labels": ["agent:integrating"]}}, fail_cmds=["issues/101/labels"])
-    st = run(st, script="transition.sh", args=["101", "agent:qa"])
+    st = run(st, script="transition", args=["101", "agent:qa"])
     assert st["_rc"] != 0 and labels(st, 101) == ["agent:integrating"]
 
 
@@ -426,12 +426,12 @@ def qa_passed_sh_reads_only_the_bot_and_the_latest_verdict():
     s = sha(0xa1)
     stranger = {"body": "<!-- agent:qa -->\n**Verdict:** pass\n<!-- agent:approved-sha %s -->" % s, "user": {"id": 1}}
     st0 = make_state({101: {"head": s, "comments": [stranger]}})
-    assert run(st0, script="qa-passed.sh", args=["101", s])["_rc"] == 1
+    assert run(st0, script="qa-passed", args=["101", s])["_rc"] == 1
     st0 = make_state({101: {"head": s, "comments": [approval(s)]}})
-    assert run(st0, script="qa-passed.sh", args=["101", s])["_stdout"].strip() == s
+    assert run(st0, script="qa-passed", args=["101", s])["_stdout"].strip() == s
     # a reviewer approval or an Integrator update record approvals, but they aren't QA
     st0 = make_state({101: {"head": s, "comments": [approval(s, "reviewer"), bot_comment("<!-- agent:integrator -->\n<!-- agent:approved-sha %s -->" % s)]}})
-    assert run(st0, script="qa-passed.sh", args=["101", s])["_rc"] == 1
+    assert run(st0, script="qa-passed", args=["101", s])["_rc"] == 1
 
 
 @test
@@ -488,7 +488,7 @@ def app_token_is_reused_while_young_and_renewed_before_it_expires():
     sp.run(["openssl", "genrsa", "-out", key, "2048"], check=True, capture_output=True)
     sp.run(["openssl", "rsa", "-in", key, "-pubout", "-out", pub], check=True, capture_output=True)
     env = dict(AGENT_APP_ID="123", AGENT_APP_PRIVATE_KEY=open(key).read(), AGENT_TOKEN_CACHE=cache, FAKE_CURL_LOG=curl_log)
-    tok = lambda: run(make_state({}), script="app-token.sh", FAKE_DATE_FILE="", **env)["_stdout"]
+    tok = lambda: run(make_state({}), script="app-token", FAKE_DATE_FILE="", **env)["_stdout"]
     open(cache, "w").write("%d ghs_start\n" % (__import__("time").time() - 60))
     assert tok() == "ghs_start" and not os.path.exists(curl_log)          # young: reused, no API call
     open(cache, "w").write("%d ghs_start\n" % (__import__("time").time() - 3000))
@@ -506,7 +506,7 @@ def app_token_is_reused_while_young_and_renewed_before_it_expires():
     ok = sp.run(["openssl", "dgst", "-sha256", "-verify", pub, "-signature", os.path.join(d, "sig")],
                 input=("%s.%s" % (h, p_)).encode(), capture_output=True)
     assert ok.returncode == 0, ok.stdout + ok.stderr                      # signed with the App's key
-    assert run(make_state({}), script="app-token.sh", GH_TOKEN="ghs_env")["_stdout"] == "ghs_env"   # no key: unchanged
+    assert run(make_state({}), script="app-token", GH_TOKEN="ghs_env")["_stdout"] == "ghs_env"   # no key: unchanged
 
 
 # --- same own changes, and the guard -----------------------------------------------------------
@@ -522,20 +522,20 @@ def own_changes_state():
 @test
 def same_own_changes_ignores_context_and_catches_new_edits():
     st0, appr, res1, res2 = own_changes_state()
-    st = run(st0, script="same-own-changes.sh", args=["101", res1])
+    st = run(st0, script="same-own-changes", args=["101", res1])
     assert st["_rc"] == 0 and st["_stdout"].strip() == appr
     out = os.path.join(tempfile.mkdtemp(), "i.diff")
-    st = run(st0, script="same-own-changes.sh", args=["101", res2, out])
+    st = run(st0, script="same-own-changes", args=["101", res2, out])
     assert st["_rc"] == 1 and "+extra" in open(out).read()
     st0["shas"][res1]["files"] = [{"filename": "img.png", "status": "modified", "changes": 0}]
-    assert run(st0, script="same-own-changes.sh", args=["101", res1])["_rc"] == 1   # binary: can't compare
+    assert run(st0, script="same-own-changes", args=["101", res1])["_rc"] == 1   # binary: can't compare
 
 
 @test
 def pr_still_current_in_the_queue():
-    st = run(make_state({101: {"head": sha(0xa1), "comments": [approval(sha(0xa1))]}}), script="pr-still-current.sh", args=["101", sha(0xa1)])
+    st = run(make_state({101: {"head": sha(0xa1), "comments": [approval(sha(0xa1))]}}), script="pr-still-current", args=["101", sha(0xa1)])
     assert "skip=PR is in the merge queue" in st["_stdout"]
-    st = run(make_state({101: {"head": sha(0xa2), "comments": [approval(sha(0xa1))]}}), script="pr-still-current.sh", args=["101", sha(0xa2)])
+    st = run(make_state({101: {"head": sha(0xa2), "comments": [approval(sha(0xa1))]}}), script="pr-still-current", args=["101", sha(0xa2)])
     assert st["_stdout"].strip() == "" and labels(st, 101) == []   # someone else's push: out of the queue, reviewed
 
 
@@ -595,16 +595,16 @@ def merge_gate_hands_a_held_pr_back_to_the_integrator():
 @test
 def watchdog_restarts_an_idle_queue_and_leaves_a_busy_one_alone():
     st0 = make_state({104: {"head": sha(0xd1), "comments": [queued()]}, 105: {"head": sha(0xe1), "comments": [queued()]}})
-    st = run(st0, script="watchdog.sh", AGENT_AUTO_MERGE="true", AGENT_WATCHDOG_MINUTES=10)
+    st = run(st0, script="watchdog", AGENT_AUTO_MERGE="true", AGENT_WATCHDOG_MINUTES=10)
     assert ["labeled", "104", "agent:queued"] in st["events"] and "restarting it at #104" in st["_stdout"]
     st0["active_runs"] = [{"workflow": "agent-integrator.yml", "status": "in_progress", "name": "Agent · Integrator", "displayTitle": "T104"}]
-    st = run(st0, script="watchdog.sh", AGENT_AUTO_MERGE="true", AGENT_WATCHDOG_MINUTES=10)
+    st = run(st0, script="watchdog", AGENT_AUTO_MERGE="true", AGENT_WATCHDOG_MINUTES=10)
     assert not st["events"] and "an Integrator run is active" in st["_stdout"]
-    st = run(make_state({104: {"head": sha(0xd1), "comments": [queued()]}}), script="watchdog.sh", AGENT_AUTO_MERGE="", AGENT_WATCHDOG_MINUTES=10)
+    st = run(make_state({104: {"head": sha(0xd1), "comments": [queued()]}}), script="watchdog", AGENT_AUTO_MERGE="", AGENT_WATCHDOG_MINUTES=10)
     assert not st["events"]   # merging switched off: queued PRs wait quietly
 
 
-# --- conflict avoidance (overlap.sh, release-waiting.sh) --------------------------------------------
+# --- conflict avoidance (agent.sh overlap, agent.sh release-waiting) --------------------------------------------
 def add_issue(st, n, labels, planned=None, label_at=None):
     it = {"kind": "issue", "labels": list(labels), "comments": [], "state": "OPEN", "head": None}
     if label_at:
@@ -637,15 +637,15 @@ def in_flight():
 def overlap_finds_in_flight_work_on_the_same_files():
     st = in_flight()
     add_issue(st, 201, ["agent:analyzed"], ["src/a.ts", "package-lock.json", "src/new.ts"])
-    out = run(st, script="overlap.sh", args=["201"])
+    out = run(st, script="overlap", args=["201"])
     assert out["_rc"] == 0 and out["_stdout"].strip().split("\n") == ["#101 src/a.ts", "#203 src/a.ts"], out["_stdout"] + out["_stderr"]
     st = in_flight()
     add_issue(st, 201, ["agent:analyzed"])   # no planned files: overlaps nothing
-    assert run(st, script="overlap.sh", args=["201"])["_stdout"].strip() == ""
+    assert run(st, script="overlap", args=["201"])["_stdout"].strip() == ""
     st = in_flight()
     add_issue(st, 201, ["agent:analyzed"], ["src/a.ts"])
     st["fail_cmds"] = ["pulls/101/files"]
-    assert run(st, script="overlap.sh", args=["201"])["_rc"] != 0   # an error is never "no overlap"
+    assert run(st, script="overlap", args=["201"])["_rc"] != 0   # an error is never "no overlap"
 
 
 @test
@@ -655,12 +655,12 @@ def waiting_issues_start_one_by_one_when_the_overlap_is_gone():
     add_issue(st, 201, ["agent:waiting"], ["src/a.ts"], label_at="2020-01-01T00:00:00Z")
     add_issue(st, 202, ["agent:waiting"], ["src/a.ts", "src/b.ts"], label_at="2020-01-01T00:00:00Z")
     add_issue(st, 203, ["agent:waiting"], ["src/z.ts"], label_at="2020-01-01T00:00:00Z")
-    st = run(st, script="release-waiting.sh", AGENT_CONFLICT_WAIT_MINUTES=10**9)
+    st = run(st, script="release-waiting", AGENT_CONFLICT_WAIT_MINUTES=10**9)
     # #101 merged: #201 starts; #202 overlaps #201 now, so it keeps waiting; #203 never overlapped.
     assert labels(st, 201) == ["agent:ready"] and labels(st, 202) == ["agent:waiting"] and labels(st, 203) == ["agent:ready"], st["_stdout"]
     assert "nothing in flight" in "\n".join(bodies(st, 201))
     # Waited too long: starts anyway, and says what it will likely conflict with.
-    st = run(st, script="release-waiting.sh", AGENT_CONFLICT_WAIT_MINUTES=1)
+    st = run(st, script="release-waiting", AGENT_CONFLICT_WAIT_MINUTES=1)
     b = next(b for b in bodies(st, 202) if "Conflict avoidance:" in b)
     assert labels(st, 202) == ["agent:ready"] and "starts anyway" in b and "#201" in b
 
@@ -689,7 +689,7 @@ def a_failed_overlap_check_keeps_waiting_and_retries():
     st = make_state({101: {"head": sha(0xa1), "labels": [], "branch": "agent/issue-1", "files": files("+x", name="src/a.ts")}})
     add_issue(st, 201, ["agent:waiting"], ["src/a.ts"], label_at="2020-01-01T00:00:00Z")
     st["fail_cmds"] = ["pulls/101/files"]
-    st = run(st, script="release-waiting.sh", AGENT_CONFLICT_WAIT_MINUTES=10**9)
+    st = run(st, script="release-waiting", AGENT_CONFLICT_WAIT_MINUTES=10**9)
     assert st["_rc"] == 0 and labels(st, 201) == ["agent:waiting"] and "trying again later" in st["_stdout"]
 
 
@@ -702,7 +702,7 @@ def pr_with(name, **extra):
 @test
 def pr_paths_picks_the_checks_and_scopes_that_apply():
     req = "Backend CI@backend/|shared/, Frontend CI@web/, Lint"
-    out = lambda name, *a, **e: run(pr_with(name), script="pr-paths.sh", args=list(a), **e)
+    out = lambda name, *a, **e: run(pr_with(name), script="pr-paths", args=list(a), **e)
     assert out("backend/api.py", "required", "101", AGENT_REQUIRED_CHECKS=req)["_stdout"].split("\n")[:2] == ["Backend CI", "Lint"]
     assert out("shared/t.ts", "required", "101", AGENT_REQUIRED_CHECKS=req)["_stdout"].split("\n")[:2] == ["Backend CI", "Lint"]
     r = out("README.md", "required", "101", AGENT_REQUIRED_CHECKS="Backend CI@backend/")
@@ -711,9 +711,9 @@ def pr_paths_picks_the_checks_and_scopes_that_apply():
     assert out("web/a.ts", "touches", "101", "web/|mobile/")["_rc"] == 0
     assert out("backend/a.py", "touches", "101", "web/")["_rc"] == 1
     assert out("backend/a.py", "touches", "101", "")["_rc"] == 0             # no paths: everything
-    st = run(pr_with("backend/a.py", fail_cmds=["pulls/101/files"]), script="pr-paths.sh", args=["touches", "101", "web/"])
+    st = run(pr_with("backend/a.py", fail_cmds=["pulls/101/files"]), script="pr-paths", args=["touches", "101", "web/"])
     assert st["_rc"] == 3                                                     # an error is never a "no"
-    st = run(pr_with("backend/a.py", fail_cmds=["pulls/101/files"]), script="pr-paths.sh", args=["required", "101"],
+    st = run(pr_with("backend/a.py", fail_cmds=["pulls/101/files"]), script="pr-paths", args=["required", "101"],
              AGENT_REQUIRED_CHECKS="Backend CI@backend/")
     assert st["_rc"] != 0 and st["_stdout"].strip() == ""                     # never drops a check silently
 
@@ -770,10 +770,10 @@ def a_pr_the_implementor_is_fixing_is_left_alone_and_restarted_if_its_run_died()
     # The run died (no agent run active, the label is old): the watchdog restarts the Implementor.
     st0 = make_state({103: {"head": sha(0xc1), "labels": ["agent:fixing"], "branch": "agent/issue-3",
                             "label_at": {"agent:fixing": "2020-01-01T00:00:00Z"}}})
-    st = run(st0, script="watchdog.sh", AGENT_WATCHDOG_MINUTES=10)
+    st = run(st0, script="watchdog", AGENT_WATCHDOG_MINUTES=10)
     assert labels(st, 103) == ["agent:changes-requested"] and "Restarting the Implementor" in bodies(st, 103)[-1], st["_stdout"]
     st0["active_runs"] = [{"workflow": "agent-implementor.yml", "status": "in_progress", "name": "Agent · Implementor", "displayTitle": "T103"}]
-    assert labels(run(st0, script="watchdog.sh", AGENT_WATCHDOG_MINUTES=10), 103) == ["agent:fixing"]   # still working
+    assert labels(run(st0, script="watchdog", AGENT_WATCHDOG_MINUTES=10), 103) == ["agent:fixing"]   # still working
 
 
 # --- QA of an app that runs on the runner or a host of its own ------------------------------------
@@ -878,7 +878,7 @@ PROD = "https://prod.example/health"
 
 def production_check(st, serves=None, merged=HEAD):
     sites = {PROD: "up " + serves} if serves else {}
-    return run(st, script="production-check.sh", args=[merged, "sandbox"], AGENT_PRODUCTION_CHECK_URL=PROD,
+    return run(st, script="production-check", args=[merged, "sandbox"], AGENT_PRODUCTION_CHECK_URL=PROD,
                AGENT_PRODUCTION_CHECK_MINUTES="1", AGENT_ESCALATION_ASSIGNEE="human", FAKE_CURL_SITES=json.dumps(sites))
 
 
@@ -935,7 +935,7 @@ def split_mode_allows_issues_and_sub_issues_but_not_deeper():
     f = Flow()
     f.issue(46); f.sub_issue(49, 46); f.sub_issue(60, 49)
     f.issue(70, body="<!-- agent:sub-issue parent=49 depends= -->")   # a human pasted the marker: no parent
-    out = lambda n, **e: f.script("split-mode.sh", n, **e)["_stdout"].strip()
+    out = lambda n, **e: f.script("split-mode", n, **e)["_stdout"].strip()
     assert out(46) == "allowed" and out(49) == "allowed" and out(70) == "allowed"
     assert out(60).startswith("not-allowed") and "2 level" in out(60)
     assert out(49, AGENT_MAX_SPLIT_DEPTH=1).startswith("not-allowed")   # the old rule: sub-issues never split
@@ -948,11 +948,11 @@ def split_mode_is_required_only_after_a_bot_split_request_newer_than_the_design(
     f.issue(49)
     f.say(49, "<!-- agent:architect -->\ndesign 1")
     f.say(49, "<!-- agent:split-required -->\nplease split", user=HUMAN)   # not the bot's: ignored
-    assert f.script("split-mode.sh", 49)["_stdout"].strip() == "allowed"
+    assert f.script("split-mode", 49)["_stdout"].strip() == "allowed"
     f.say(49, "<!-- agent:split-required -->\n🧩 The Lead asked for a split.")
-    assert f.script("split-mode.sh", 49)["_stdout"].strip() == "required"
+    assert f.script("split-mode", 49)["_stdout"].strip() == "required"
     f.say(49, "<!-- agent:architect -->\ndesign 2 (the split)")
-    assert f.script("split-mode.sh", 49)["_stdout"].strip() == "allowed"
+    assert f.script("split-mode", 49)["_stdout"].strip() == "allowed"
 
 
 @test
@@ -1023,7 +1023,7 @@ def an_architect_that_was_asked_to_split_and_did_not_goes_to_the_lead_once():
     f.say(1, "<!-- agent:split-required -->\nsplit")
     f.architect(1, "ready", comment=False)
     assert f.labels(1) == ["agent:needs-decision"] and any("Architect agent failed" in b for b in f.bodies(1))
-    assert f.script("split-mode.sh", 1)["_stdout"].strip() == "required"
+    assert f.script("split-mode", 1)["_stdout"].strip() == "required"
 
 
 @test
@@ -1033,18 +1033,18 @@ def the_lead_budget_counts_only_decisions_since_the_last_escalation():
     for _ in range(3):
         f.say(49, "<!-- agent:lead -->\n## 🧭 Lead decision")
     f.say(49, "<!-- agent:lead -->\nforged", user=HUMAN)
-    assert f.script("lead-budget.sh", 49)["_stdout"].strip() == "3"
+    assert f.script("lead-budget", 49)["_stdout"].strip() == "3"
     g = f.lead(49, "implement")
     assert g["stop"] == "true" and f.labels(49) == ["agent:needs-human"]
     assert any("Lead has already made 3 decisions" in b for b in f.bodies(49))
     # The human sends it back: a fresh budget, and the Lead can split.
     f.say(49, "@claude the Lead should divide this issue into sub-issues", user=HUMAN)
     f.label(49, "agent:needs-decision", only=True)
-    assert f.script("lead-budget.sh", 49)["_stdout"].strip() == "0"
+    assert f.script("lead-budget", 49)["_stdout"].strip() == "0"
     g = f.lead(49, "split")
     assert g.get("stop") != "true" and g["used"] == "0" and g["split"] == "allowed"
     assert f.labels(49) == ["agent:analyzed"] and f.count(49, "<!-- agent:split-required -->") == 1
-    assert f.script("lead-budget.sh", 49)["_stdout"].strip() == "1"
+    assert f.script("lead-budget", 49)["_stdout"].strip() == "1"
 
 
 @test
@@ -1142,7 +1142,7 @@ def an_issue_that_must_wait_is_parked_and_restarts_when_the_other_closes():
     f.implementor(49, "waiting", waiting_on=[54, 55, 49], reason="#54 must merge first")
     assert f.labels(49) == ["agent:blocked"] and f.count(49, "<!-- agent:waits-on 54,55 -->") == 1
     assert not f.count(49, "<!-- agent:lead -->")
-    f.script("release-blocked.sh")
+    f.script("release-blocked")
     assert f.labels(49) == ["agent:blocked"]
     f.close(54); f.closed(54)
     assert f.labels(49) == ["agent:blocked"]          # #55 still open
@@ -1181,7 +1181,7 @@ def release_leaves_sub_issues_blocked_by_siblings_to_subissues_sh_and_the_other_
     f.close(47); f.closed(47)
     assert f.labels(48) == ["agent:analyzed"]          # its sibling is done: design starts
     assert f.labels(49) == ["agent:blocked"]           # still waits for #54, and is not sent back to design
-    f.script("release-blocked.sh")
+    f.script("release-blocked")
     assert f.labels(48) == ["agent:analyzed"]
     f.close(54); f.closed(54)
     assert f.labels(49) == ["agent:ready"]             # designed already: straight to the Implementor

@@ -1,11 +1,11 @@
 name: "Agent · Sub-issues"
 
 # Trigger: any issue is closed, by a merged PR, by the Lead or by a human.
-# For an issue created by split.sh (the Architect split its parent):
+# For an issue created by agent.sh split (the Architect split its parent):
 #   - completed: unblocks sibling sub-issues whose dependencies are all done (`agent:blocked` -> `agent:analyzed`)
 #     and closes the parent when every sub-issue is done
 #   - not planned: hands the parent to the Lead
-# For any issue: restarts issues the Implementor parked until it closed (release-blocked.sh).
+# For any issue: restarts issues the Implementor parked until it closed (agent.sh release-blocked).
 on:
   issues:
     types: [closed]
@@ -47,12 +47,12 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           CLOSED: ${{ github.event.issue.number }}
         # The sweep catches up on closures whose runs GitHub dropped from the shared queue.
-        # subissues.sh does nothing for an issue that isn't a sub-issue.
+        # agent.sh subissues does nothing for an issue that isn't a sub-issue.
         run: |
-          scripts/agents/subissues.sh "$CLOSED" | tee -a "$GITHUB_STEP_SUMMARY"
-          scripts/agents/subissues.sh --sweep | tee -a "$GITHUB_STEP_SUMMARY"
+          scripts/agents/agent.sh subissues "$CLOSED" | tee -a "$GITHUB_STEP_SUMMARY"
+          scripts/agents/agent.sh subissues --sweep | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Restart issues that waited for this one
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: scripts/agents/release-blocked.sh | tee -a "$GITHUB_STEP_SUMMARY"
+        run: scripts/agents/agent.sh release-blocked | tee -a "$GITHUB_STEP_SUMMARY"

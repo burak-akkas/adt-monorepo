@@ -5,7 +5,7 @@ name: "Agent · Lead"
 # It picks one action that unblocks the team, or escalates to a human (`agent:needs-human`).
 # Budget: AGENT_MAX_LEAD_DECISIONS per item (default 3) since its last escalation to a human, then it
 # escalates. When a human sends an escalated item back to the team, the Lead gets a fresh budget.
-# On an issue, `split` sends it back to the Architect with splitting required (split-mode.sh).
+# On an issue, `split` sends it back to the Architect with splitting required (agent.sh split-mode).
 # PR events use pull_request_target: unlike pull_request, it also fires for PRs with merge
 # conflicts (GitHub creates no merge commit for those), and it always runs this workflow
 # file from the default branch. Jobs only act on same-repo PRs and check out the PR head explicitly.
@@ -40,7 +40,7 @@ jobs:
       TRUSTED: .agent-trusted/.github/agents
       BIN: .agent-trusted/scripts/agents
       MAX_DECISIONS: ${{ vars.AGENT_MAX_LEAD_DECISIONS || '3' }}
-      AGENT_SPLIT: ${{ vars.AGENT_SPLIT }}                                  # split-mode.sh
+      AGENT_SPLIT: ${{ vars.AGENT_SPLIT }}                                  # agent.sh split-mode
       AGENT_MAX_SPLIT_DEPTH: ${{ vars.AGENT_MAX_SPLIT_DEPTH || '2' }}
     steps:
       - uses: actions/create-github-app-token@v2
@@ -72,11 +72,11 @@ jobs:
         run: |
           mkdir -p .agent-out
           printf '.agent-out/\n.agent-trusted/\n' >> .git/info/exclude
-          used=$("$BIN/lead-budget.sh" "$N")
+          used=$("$BIN/agent.sh" lead-budget "$N")
           echo "used=$used" >> "$GITHUB_OUTPUT"
-          echo "total=$("$BIN/count-comments.sh" "$N" lead)" >> "$GITHUB_OUTPUT"
+          echo "total=$("$BIN/agent.sh" count-comments "$N" lead)" >> "$GITHUB_OUTPUT"
           if [ "$KIND" = issue ]; then
-            split=$("$BIN/split-mode.sh" "$N")
+            split=$("$BIN/agent.sh" split-mode "$N")
             case "$split" in
               not-allowed*) echo "split=not-allowed" >> "$GITHUB_OUTPUT"
                             echo "split_text=not possible (${split#not-allowed })" >> "$GITHUB_OUTPUT" ;;
@@ -85,7 +85,7 @@ jobs:
             esac
           fi
           if [ "$used" -ge "$MAX_DECISIONS" ]; then
-            "$BIN/transition.sh" "$N" agent:needs-human
+            "$BIN/agent.sh" transition "$N" agent:needs-human
             gh api "repos/$GITHUB_REPOSITORY/issues/$N/comments" -f body="🛑 Lead has already made $used decisions here without resolving it. Escalating to a human." >/dev/null
             echo "stop=true" >> "$GITHUB_OUTPUT"
           fi
@@ -138,40 +138,40 @@ jobs:
         run: |
           action=$(echo "${OUT:-null}" | jq -r '.action // "error"')
           reason=$(echo "${OUT:-null}" | jq -r '.rationale // "no rationale"')
-          if [ "$("$BIN/count-comments.sh" "$N" lead)" -le "$TOTAL" ]; then
+          if [ "$("$BIN/agent.sh" count-comments "$N" lead)" -le "$TOTAL" ]; then
             echo "::warning::Lead returned '$action' but posted no decision comment"
             action=missing-comment
           fi
           echo "Lead decision on $KIND #$N: $action ($reason)" >> "$GITHUB_STEP_SUMMARY"
 
           case "$KIND:$action" in
-            issue:restart-analysis) "$BIN/transition.sh" "$N" agent:start ;;
-            issue:redesign)         "$BIN/transition.sh" "$N" agent:analyzed ;;
-            issue:implement)        "$BIN/transition.sh" "$N" agent:ready ;;
+            issue:restart-analysis) "$BIN/agent.sh" transition "$N" agent:start ;;
+            issue:redesign)         "$BIN/agent.sh" transition "$N" agent:analyzed ;;
+            issue:implement)        "$BIN/agent.sh" transition "$N" agent:ready ;;
             issue:split)            if [ "$SPLIT" = allowed ]; then
                                       gh api "repos/$GITHUB_REPOSITORY/issues/$N/comments" -f body="<!-- agent:split-required -->
           🧩 **The Lead asked for a split.** The Architect runs again and splits this issue into sub-issues (see the Lead's comment above)." >/dev/null
-                                      "$BIN/transition.sh" "$N" agent:analyzed
+                                      "$BIN/agent.sh" transition "$N" agent:analyzed
                                     else
                                       action=escalate
-                                      "$BIN/transition.sh" "$N" agent:needs-human
+                                      "$BIN/agent.sh" transition "$N" agent:needs-human
                                       gh api "repos/$GITHUB_REPOSITORY/issues/$N/comments" -f body="⚠️ Lead chose \`split\`, but this issue can't be split further. Escalating to a human." >/dev/null
                                     fi ;;
-            issue:close)            "$BIN/transition.sh" "$N" agent:out-of-scope
+            issue:close)            "$BIN/agent.sh" transition "$N" agent:out-of-scope
                                     gh issue close "$N" --reason "not planned" ;;
-            pr:fix)                 "$BIN/transition.sh" "$N" agent:changes-requested ;;
-            pr:re-review)           "$BIN/transition.sh" "$N" agent:review ;;
-            pr:qa)                  "$BIN/transition.sh" "$N" agent:qa ;;
-            pr:approve)             "$BIN/approve.sh" "$N" "${{ github.event.pull_request.head.sha }}" lead ;;
-            pr:close)               "$BIN/transition.sh" "$N"
+            pr:fix)                 "$BIN/agent.sh" transition "$N" agent:changes-requested ;;
+            pr:re-review)           "$BIN/agent.sh" transition "$N" agent:review ;;
+            pr:qa)                  "$BIN/agent.sh" transition "$N" agent:qa ;;
+            pr:approve)             "$BIN/agent.sh" approve "$N" "${{ github.event.pull_request.head.sha }}" lead ;;
+            pr:close)               "$BIN/agent.sh" transition "$N"
                                     gh pr close "$N" --delete-branch ;;
-            *:escalate)             "$BIN/transition.sh" "$N" agent:needs-human ;;
-            *)                      "$BIN/transition.sh" "$N" agent:needs-human
+            *:escalate)             "$BIN/agent.sh" transition "$N" agent:needs-human ;;
+            *)                      "$BIN/agent.sh" transition "$N" agent:needs-human
                                     gh api "repos/$GITHUB_REPOSITORY/issues/$N/comments" \
                                       -f body="⚠️ Lead could not decide ('$action', [run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Escalating to a human." >/dev/null ;;
           esac
           if [ "$KIND" = "issue" ]; then
-            .agent-trusted/scripts/agents/progress.sh "$N" "🧭 **Lead**: $action"
+            .agent-trusted/scripts/agents/agent.sh progress "$N" "🧭 **Lead**: $action"
           else
-            .agent-trusted/scripts/agents/progress.sh --pr "$N" "🧭 **Lead** (on #$N): $action"
+            .agent-trusted/scripts/agents/agent.sh progress --pr "$N" "🧭 **Lead** (on #$N): $action"
           fi

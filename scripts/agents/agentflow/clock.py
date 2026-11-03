@@ -16,11 +16,15 @@ class Clock(Protocol):
 
 
 class SystemClock:
-    """The real time. Sleeps by running `sleep`, as the bash scripts did, so the simulator's
-    instant `sleep` on PATH (scripts/sim/fakegh) applies to the Python code too."""
+    """The real time, read with `date +%s` and waited with `sleep`, as the bash scripts did, so the
+    simulator's virtual clock on PATH (scripts/sim/fakegh: `date` moves a minute per call, `sleep` returns
+    at once) drives the Python code too, and a 30-minute wait takes 30 polls instead of 30 minutes."""
 
     def now(self) -> float:
-        return time.time()
+        try:
+            return float(subprocess.run(["date", "+%s"], capture_output=True, text=True, check=False).stdout.strip())
+        except (OSError, ValueError):
+            return time.time()
 
     def sleep(self, seconds: float) -> None:
         try:

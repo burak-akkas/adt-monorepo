@@ -36,6 +36,7 @@ class Issue:
     labels: tuple[str, ...]
     is_pr: bool
     is_draft: bool = False  # only known from listings (open_items)
+    updated_at: str = ""
 
     @property
     def is_open(self) -> bool:
@@ -89,3 +90,21 @@ class Commit:
     author_id: int | None  # the GitHub user, if the author maps to one
     committer_login: str | None
     verified: bool
+
+
+@dataclass(frozen=True)
+class Check:
+    """A check run on a PR's head, as `gh pr checks` reports it."""
+
+    workflow: str
+    name: str
+    bucket: str  # pass, fail, pending, skipping or cancel
+    link: str
+
+
+@dataclass(frozen=True)
+class Run:
+    """A workflow run that is queued or running."""
+
+    workflow: str  # the workflow's name, e.g. "Agent · Integrator"
+    title: str  # the run's title: the issue or PR title

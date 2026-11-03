@@ -65,3 +65,19 @@ def number(env: Mapping[str, str], name: str, default: int) -> int:
         return int(value)
     except ValueError:
         raise ConfigError(f"{name} must be a number, not {value!r}") from None
+
+
+DEFAULT_URLS = {"preview": "https://{owner}.github.io/{repo}/pr-{pr}/", "production": "https://{owner}.github.io/{repo}/"}
+
+
+def link(env: Mapping[str, str], kind: str, pr: str, repo: str) -> str:
+    """The project's preview or production URL from its template (AGENT_PREVIEW_URL, AGENT_PRODUCTION_URL;
+    {owner}, {repo} and {pr} are filled in). "" when the template is `none` (no such site) or
+    `deployment` (only the deployment knows the URL; QA finds it)."""
+    if kind not in DEFAULT_URLS:
+        raise ConfigError(f"url: unknown kind '{kind}'")
+    template = env.get(f"AGENT_{kind.upper()}_URL") or DEFAULT_URLS[kind]
+    if template in ("none", "deployment"):
+        return ""
+    owner, _, name = repo.partition("/")
+    return template.replace("{owner}", owner).replace("{repo}", name).replace("{pr}", pr)
