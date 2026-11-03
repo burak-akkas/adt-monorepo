@@ -14,7 +14,7 @@ import {
   type RenameBoardRequest,
   type UpdateBoardSettingsRequest,
 } from "@adt/contracts";
-import { SessionGuard, UserId } from "../auth/session.guard.js";
+import { SessionGuard, UserEmail, UserId } from "../auth/session.guard.js";
 import { ZodValidationPipe } from "../common/zod-validation.pipe.js";
 import { BoardsService } from "./boards.service.js";
 
@@ -24,8 +24,8 @@ export class BoardsController {
   constructor(@Inject(BoardsService) private readonly boards: BoardsService) {}
 
   @Get()
-  list(@UserId() userId: string): Promise<BoardSummary[]> {
-    return this.boards.list(userId);
+  list(@UserId() userId: string, @UserEmail() email: string): Promise<BoardSummary[]> {
+    return this.boards.list(userId, email);
   }
 
   @Post()
@@ -40,17 +40,18 @@ export class BoardsController {
   @Post("import")
   async importBoard(
     @UserId() userId: string,
+    @UserEmail() email: string,
     @Body(new ZodValidationPipe(importBoardRequestSchema)) body: ParsedImportBoardRequest,
     @Res({ passthrough: true }) res: Response,
   ): Promise<ImportBoardResponse> {
-    const result = await this.boards.importBoard(userId, body);
+    const result = await this.boards.importBoard(userId, email, body);
     res.status(result.created ? 201 : 200);
     return result;
   }
 
   @Get(":id")
-  get(@UserId() userId: string, @Param("id") id: string): Promise<BoardDetail> {
-    return this.boards.get(id, userId);
+  get(@UserId() userId: string, @UserEmail() email: string, @Param("id") id: string): Promise<BoardDetail> {
+    return this.boards.get(id, userId, email);
   }
 
   @Patch(":id")
@@ -65,10 +66,11 @@ export class BoardsController {
   @Patch(":id/settings")
   updateSettings(
     @UserId() userId: string,
+    @UserEmail() email: string,
     @Param("id") id: string,
     @Body(new ZodValidationPipe(updateBoardSettingsRequestSchema)) body: UpdateBoardSettingsRequest,
   ): Promise<BoardSettings> {
-    return this.boards.updateSettings(id, userId, body);
+    return this.boards.updateSettings(id, userId, email, body);
   }
 
   @Post(":id/duplicate")

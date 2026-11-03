@@ -3,6 +3,7 @@ import { MAX_TEMPLATES, type CardResponse, type CreateTemplateRequest, type Temp
 import { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { cardDetails, toCard } from "../cards/card.mapper.js";
+import { boardAccessWhere } from "../boards/board-access.js";
 
 type TemplateRow = Prisma.CardTemplateGetPayload<object>;
 
@@ -45,18 +46,18 @@ function uniqueLabels(labels: string[]): string[] {
 export class TemplatesService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
-  /** Loads a board only through its owner, so another user's board is simply not found. */
-  private async findOwnedBoard(tx: Prisma.TransactionClient, id: string, userId: string) {
-    const board = await tx.board.findFirst({ where: { id, userId } });
+  /** Loads a board only if the user owns it or is a member, so any other board is simply not found. */
+  private async findOwnedBoard(tx: Prisma.TransactionClient, id: string, userId: string, email: string) {
+    const board = await tx.board.findFirst({ where: { id, ...boardAccessWhere(userId, email) } });
     if (!board) {
       throw new NotFoundException("Board not found");
     }
     return board;
   }
 
-  /** Loads a template only through its board's owner. */
-  private async findOwnedTemplate(tx: Prisma.TransactionClient, id: string, userId: string) {
-    const template = await tx.cardTemplate.findFirst({ where: { id, board: { userId } } });
+  /** Loads a template only through a board the user owns or is a member of. */
+  private async findOwnedTemplate(tx: Prisma.TransactionClient, id: string, userId: string, email: string) {
+    const template = await tx.cardTemplate.findFirst({ where: { id, board: boardAccessWhere(userId, email) } });
     if (!template) {
       throw new NotFoundException("Template not found");
     }
@@ -71,16 +72,16 @@ export class TemplatesService {
     }
   }
 
-  async list(boardId: string, userId: string): Promise<TemplateResponse[]> {
-    await this.findOwnedBoard(this.prisma, boardId, userId);
+  async list(boardId: string, userId: string, email: string): Promise<TemplateResponse[]> {
+    await this.findOwnedBoard(this.prisma, boardId, userId, email);
     const templates = await this.prisma.cardTemplate.findMany({ where: { boardId }, orderBy: templateOrder });
     return templates.map(toTemplate);
   }
 
-  async create(boardId: string, userId: string, body: CreateTemplateRequest): Promise<TemplateResponse> {
+  async create(boardId: string, userId: string, email: string, body: CreateTemplateRequest): Promise<TemplateResponse> {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        await this.findOwnedBoard(tx, boardId, userId);
+        await this.findOwnedBoard(tx, boardId, userId, email);
         if ((await tx.cardTemplate.count({ where: { boardId } })) >= MAX_TEMPLATES) {
           throw new ConflictException(`A board can have at most ${MAX_TEMPLATES} templates`);
         }
@@ -105,10 +106,10 @@ export class TemplatesService {
     }
   }
 
-  async rename(id: string, userId: string, name: string): Promise<TemplateResponse> {
+  async rename(id: string, userId: string, email: string, name: string): Promise<TemplateResponse> {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const template = await this.findOwnedTemplate(tx, id, userId);
+        const template = await this.findOwnedTemplate(tx, id, userId, email);
         await this.assertNameFree(tx, template.boardId, name, id);
         return toTemplate(await tx.cardTemplate.update({ where: { id }, data: { name } }));
       });
@@ -118,18 +119,18 @@ export class TemplatesService {
     }
   }
 
-  async remove(id: string, userId: string): Promise<void> {
-    await this.findOwnedTemplate(this.prisma, id, userId);
-    await this.prisma.cardTemplate.deleteMany({ where: { id, board: { userId } } });
+  async remove(id: string, userId: string, email: string): Promise<void> {
+    await this.findOwnedTemplate(this.prisma, id, userId, email);
+    await this.prisma.cardTemplate.deleteMany({ where: { id, board: boardAccessWhere(userId, email) } });
   }
 
   /**
    * Appends a new card built from the template to `listId`; a missing list, or one that is not on the template's
    * board, falls back to the board's first list. The checklist is unticked and there is no due date.
    */
-  async createCardFromTemplate(id: string, userId: string, listId?: string): Promise<CardResponse> {
+  async createCardFromTemplate(id: string, userId: string, email: string, listId?: string): Promise<CardResponse> {
     return this.prisma.$transaction(async (tx) => {
-      const template = await this.findOwnedTemplate(tx, id, userId);
+      const template = await this.findOwnedTemplate(tx, id, userId, email);
       const lists = await tx.boardList.findMany({ where: { boardId: template.boardId }, orderBy: { position: "asc" } });
       const target = lists.find((list) => list.id === listId) ?? lists[0];
       if (!target) {

@@ -105,7 +105,8 @@ describe("board members over HTTP", () => {
     expect(await prisma.boardMember.count({ where: { boardId } })).toBe(0);
   });
 
-  it("grants a member no access to the board's other endpoints yet", async () => {
-    await as("b").get(`/boards/${boardId}`).expect(404);
+  it("lets a member read the board, but not a non-member (see board-sharing.security.spec.ts for the rest)", async () => {
+    await as("b").get(`/boards/${boardId}`).expect(200);
+    await as("c").get(`/boards/${boardId}`).expect(404);
   });
 });

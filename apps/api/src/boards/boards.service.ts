@@ -15,6 +15,7 @@ import { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { archiveOrder } from "../archive/archive.service.js";
 import { cardDetails, toArchivedCard, toCard, type CardWithDetails } from "../cards/card.mapper.js";
+import { boardAccessWhere, boardOwnerWhere } from "./board-access.js";
 import { buildBoardImport, importedBoardName } from "./boards.import.js";
 import { templateOrder, toTemplate } from "../templates/templates.service.js";
 
@@ -28,8 +29,14 @@ type BoardRow = Prisma.BoardGetPayload<object>;
 type BoardWithContent = Prisma.BoardGetPayload<{ include: typeof boardWithContent }>;
 type ArchivedCardRow = CardWithDetails;
 
-function toSummary(board: BoardRow): BoardSummary {
-  return { id: board.id, name: board.name, createdAt: board.createdAt.toISOString(), updatedAt: board.updatedAt.toISOString() };
+function toSummary(board: BoardRow, userId: string): BoardSummary {
+  return {
+    id: board.id,
+    name: board.name,
+    createdAt: board.createdAt.toISOString(),
+    updatedAt: board.updatedAt.toISOString(),
+    role: board.userId === userId ? "owner" : "editor",
+  };
 }
 
 function toBackground(board: BoardRow): Background {
@@ -48,9 +55,9 @@ function toSettings(board: BoardRow, lists: { id: string; collapsed: boolean }[]
   };
 }
 
-function toDetail(board: BoardWithContent, archive: ArchivedCardRow[]): BoardDetail {
+function toDetail(board: BoardWithContent, archive: ArchivedCardRow[], userId: string): BoardDetail {
   return {
-    ...toSummary(board),
+    ...toSummary(board, userId),
     lists: board.lists.map((list) => ({
       id: list.id,
       boardId: list.boardId,
@@ -90,27 +97,29 @@ export function copyBoardName(baseName: string, existingNames: string[]): string
 export class BoardsService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
-  /** The one place that loads a board: always together with its owner, so another user's board is simply not found. */
+  /** Loads a board only for its owner (rename, duplicate, delete): editors and strangers get "not found". */
   private async findOwned(id: string, userId: string): Promise<BoardRow> {
-    const board = await this.prisma.board.findFirst({ where: { id, userId } });
+    const board = await this.prisma.board.findFirst({ where: { id, ...boardOwnerWhere(userId) } });
     if (!board) {
       throw new NotFoundException("Board not found");
     }
     return board;
   }
 
-  async list(userId: string): Promise<BoardSummary[]> {
-    let boards = await this.prisma.board.findMany({ where: { userId }, orderBy: { createdAt: "asc" } });
-    if (boards.length === 0) {
+  /** Boards the user owns and boards shared with them, oldest first. A user who owns none gets a default board. */
+  async list(userId: string, email: string): Promise<BoardSummary[]> {
+    const load = () => this.prisma.board.findMany({ where: boardAccessWhere(userId, email), orderBy: { createdAt: "asc" } });
+    let boards = await load();
+    if (!boards.some((board) => board.userId === userId)) {
       try {
         await this.createDefaultBoard(userId);
       } catch (error) {
         // A parallel first request created it already.
         if (!isUniqueViolation(error)) throw error;
       }
-      boards = await this.prisma.board.findMany({ where: { userId }, orderBy: { createdAt: "asc" } });
+      boards = await load();
     }
-    return boards.map(toSummary);
+    return boards.map((board) => toSummary(board, userId));
   }
 
   private createDefaultBoard(userId: string) {
@@ -130,7 +139,7 @@ export class BoardsService {
     try {
       return await this.prisma.$transaction(async (tx) => {
         await this.assertNameFree(tx, userId, name);
-        return toSummary(await tx.board.create({ data: { userId, name } }));
+        return toSummary(await tx.board.create({ data: { userId, name } }), userId);
       });
     } catch (error) {
       if (isUniqueViolation(error)) throw nameTaken();
@@ -138,8 +147,8 @@ export class BoardsService {
     }
   }
 
-  async get(id: string, userId: string): Promise<BoardDetail> {
-    const board = await this.prisma.board.findFirst({ where: { id, userId }, include: boardWithContent });
+  async get(id: string, userId: string, email: string): Promise<BoardDetail> {
+    const board = await this.prisma.board.findFirst({ where: { id, ...boardAccessWhere(userId, email) }, include: boardWithContent });
     if (!board) {
       throw new NotFoundException("Board not found");
     }
@@ -148,7 +157,7 @@ export class BoardsService {
       orderBy: archiveOrder,
       include: cardDetails,
     });
-    return toDetail(board, archive);
+    return toDetail(board, archive, userId);
   }
 
   async rename(id: string, userId: string, name: string): Promise<BoardSummary> {
@@ -156,7 +165,7 @@ export class BoardsService {
     try {
       return await this.prisma.$transaction(async (tx) => {
         await this.assertNameFree(tx, userId, name, id);
-        return toSummary(await tx.board.update({ where: { id }, data: { name } }));
+        return toSummary(await tx.board.update({ where: { id }, data: { name } }), userId);
       });
     } catch (error) {
       if (isUniqueViolation(error)) throw nameTaken();
@@ -164,11 +173,10 @@ export class BoardsService {
     }
   }
 
-  /** Changes only the keys present in `update`; `null` clears. List ids must belong to the board. */
-  async updateSettings(id: string, userId: string, update: UpdateBoardSettingsRequest): Promise<BoardSettings> {
-    await this.findOwned(id, userId);
+  /** Changes only the keys present in `update`; `null` clears. List ids must belong to the board. Owners and editors. */
+  async updateSettings(id: string, userId: string, email: string, update: UpdateBoardSettingsRequest): Promise<BoardSettings> {
     return this.prisma.$transaction(async (tx) => {
-      const board = await tx.board.findFirst({ where: { id, userId } });
+      const board = await tx.board.findFirst({ where: { id, ...boardAccessWhere(userId, email) } });
       if (!board) throw new NotFoundException("Board not found");
       const lists = await tx.boardList.findMany({ where: { boardId: id }, select: { id: true } });
       const own = new Set(lists.map((list) => list.id));
@@ -201,12 +209,13 @@ export class BoardsService {
     });
   }
 
+  /** Owner-only: the copy would land in the caller's own account. */
   async duplicate(id: string, userId: string): Promise<BoardSummary> {
     await this.findOwned(id, userId);
     for (let attempt = 0; ; attempt++) {
       try {
         return await this.prisma.$transaction(async (tx) => {
-          const source = await tx.board.findFirst({ where: { id, userId }, include: boardWithContent });
+          const source = await tx.board.findFirst({ where: { id, ...boardOwnerWhere(userId) }, include: boardWithContent });
           if (!source) throw new NotFoundException("Board not found");
           const boards = await tx.board.findMany({ where: { userId }, select: { name: true } });
           const copy = await tx.board.create({
@@ -272,9 +281,10 @@ export class BoardsService {
                 where: { id: copy.id },
                 data: { doingListId: mapped(source.doingListId), doneListId: mapped(source.doneListId) },
               }),
+              userId,
             );
           }
-          return toSummary(copy);
+          return toSummary(copy, userId);
         });
       } catch (error) {
         // Two duplicates raced for the same name: pick the next free one once.
@@ -289,9 +299,9 @@ export class BoardsService {
    * Creates a whole board from a snapshot, once per (user, importKey): a repeated or concurrent import returns
    * the board the first one made. A taken name gets a "(copy)" suffix instead of failing.
    */
-  async importBoard(userId: string, snapshot: ParsedImportBoardRequest): Promise<ImportBoardResponse> {
+  async importBoard(userId: string, email: string, snapshot: ParsedImportBoardRequest): Promise<ImportBoardResponse> {
     const existing = await this.findByImportKey(userId, snapshot.importKey);
-    if (existing) return { board: await this.get(existing.id, userId), created: false };
+    if (existing) return { board: await this.get(existing.id, userId, email), created: false };
 
     const data = buildBoardImport(snapshot);
     for (let attempt = 0; ; attempt++) {
@@ -313,12 +323,12 @@ export class BoardsService {
           },
           { timeout: 60_000, maxWait: 10_000 },
         );
-        return { board: await this.get(id, userId), created: true };
+        return { board: await this.get(id, userId, email), created: true };
       } catch (error) {
         if (!isUniqueViolation(error)) throw error;
         // A parallel request with the same key won the race: return its board.
         const winner = await this.findByImportKey(userId, snapshot.importKey);
-        if (winner) return { board: await this.get(winner.id, userId), created: false };
+        if (winner) return { board: await this.get(winner.id, userId, email), created: false };
         // Otherwise the name was taken in the meantime: pick the next free one once.
         if (attempt > 0) throw nameTaken();
       }
