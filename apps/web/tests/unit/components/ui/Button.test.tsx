@@ -36,6 +36,28 @@ describe("<Button />", () => {
     expect(onClick).not.toHaveBeenCalled();
   });
 
+  it("while loading it is busy, disabled, keeps its name and shows a spinner", async () => {
+    const onClick = vi.fn();
+    render(
+      <Button loading onClick={onClick}>
+        Save
+      </Button>,
+    );
+    const button = screen.getByRole("button", { name: "Save" });
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).toBeDisabled();
+    expect(button.querySelector("svg.animate-spin")).not.toBeNull();
+    await userEvent.setup().click(button);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("is not busy when not loading", () => {
+    render(<Button>Save</Button>);
+    const button = screen.getByRole("button", { name: "Save" });
+    expect(button).not.toHaveAttribute("aria-busy");
+    expect(button.querySelector("svg")).toBeNull();
+  });
+
   it("gives each variant its own look and merges className", () => {
     render(
       <>

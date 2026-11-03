@@ -87,7 +87,7 @@ export function ChangePasswordForm() {
           {PASSWORD_CHANGED_MESSAGE}
         </p>
       )}
-      <Button type="submit" variant="primary" disabled={submitting}>
+      <Button type="submit" variant="primary" loading={submitting}>
         Change password
       </Button>
     </form>
