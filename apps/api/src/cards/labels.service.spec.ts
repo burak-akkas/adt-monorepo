@@ -18,6 +18,7 @@ describe("LabelsService", () => {
   let alice: string;
   let bob: string;
   const emails = [`alice-${run}@labels-spec.test`, `bob-${run}@labels-spec.test`];
+  const [aliceEmail, bobEmail] = emails;
 
   const newCard = async (userId: string) => {
     const board = await prisma.board.create({
@@ -51,40 +52,40 @@ describe("LabelsService", () => {
 
   it("adds labels keeping spelling and order", async () => {
     const card = await newCard(alice);
-    await service.add(card.id, alice, "Bug");
-    await service.add(card.id, alice, "urgent");
-    const updated = await service.add(card.id, alice, "Front End");
+    await service.add(card.id, alice, aliceEmail, "Bug");
+    await service.add(card.id, alice, aliceEmail, "urgent");
+    const updated = await service.add(card.id, alice, aliceEmail, "Front End");
     expect(updated.labels).toEqual(["Bug", "urgent", "Front End"]);
   });
 
   it("answers 409 for a case-insensitive duplicate on the same card only", async () => {
     const card = await newCard(alice);
     const other = await newCard(alice);
-    await service.add(card.id, alice, "bug");
-    await expect(service.add(card.id, alice, "Bug")).rejects.toBeInstanceOf(ConflictException);
+    await service.add(card.id, alice, aliceEmail, "bug");
+    await expect(service.add(card.id, alice, aliceEmail, "Bug")).rejects.toBeInstanceOf(ConflictException);
     expect((await cards.get(card.id, alice)).labels).toEqual(["bug"]);
-    expect((await service.add(other.id, alice, "Bug")).labels).toEqual(["Bug"]);
+    expect((await service.add(other.id, alice, aliceEmail, "Bug")).labels).toEqual(["Bug"]);
   });
 
   it("removes ignoring case and surrounding spaces, keeping positions dense", async () => {
     const card = await newCard(alice);
-    for (const name of ["a", "Bug", "c"]) await service.add(card.id, alice, name);
-    const updated = await service.remove(card.id, alice, "  bUG ");
+    for (const name of ["a", "Bug", "c"]) await service.add(card.id, alice, aliceEmail, name);
+    const updated = await service.remove(card.id, alice, aliceEmail, "  bUG ");
     expect(updated.labels).toEqual(["a", "c"]);
     expect(await positions(card.id)).toEqual([["a", 0], ["c", 1]]);
   });
 
   it("treats removing an unknown label as a no-op", async () => {
     const card = await newCard(alice);
-    await service.add(card.id, alice, "a");
-    expect((await service.remove(card.id, alice, "zzz")).labels).toEqual(["a"]);
+    await service.add(card.id, alice, aliceEmail, "a");
+    expect((await service.remove(card.id, alice, aliceEmail, "zzz")).labels).toEqual(["a"]);
   });
 
   it("gives another user's card a 404 and leaves it unchanged", async () => {
     const card = await newCard(alice);
-    await service.add(card.id, alice, "mine");
-    await expect(service.add(card.id, bob, "x")).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.remove(card.id, bob, "mine")).rejects.toBeInstanceOf(NotFoundException);
+    await service.add(card.id, alice, aliceEmail, "mine");
+    await expect(service.add(card.id, bob, bobEmail, "x")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.remove(card.id, bob, bobEmail, "mine")).rejects.toBeInstanceOf(NotFoundException);
     expect((await cards.get(card.id, alice)).labels).toEqual(["mine"]);
   });
 });
