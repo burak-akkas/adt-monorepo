@@ -5,10 +5,8 @@ const uniqueEmail = () => `e2e-${Date.now()}-${Math.floor(Math.random() * 1e6)}@
 
 test("sign-up, logout, login and board actions work through the /api proxy", async ({ page, context }) => {
   const email = uniqueEmail();
-  const nav = page.getByRole("navigation", { name: "Account" });
 
-  await page.goto("./");
-  await nav.getByRole("link", { name: "Register" }).click();
+  await page.goto("register");
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Register", exact: true }).click();
@@ -24,9 +22,8 @@ test("sign-up, logout, login and board actions work through the /api proxy", asy
   await expect(todo.getByText("Through the proxy")).toBeVisible();
 
   await page.getByRole("button", { name: "Log out" }).click();
-  await expect(nav.getByRole("link", { name: "Log in" })).toBeVisible();
+  await expect(page).toHaveURL(/\/login/);
 
-  await nav.getByRole("link", { name: "Log in" }).click();
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Log in", exact: true }).click();

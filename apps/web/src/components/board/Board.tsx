@@ -38,7 +38,7 @@ import {
 import { cardToText } from "@/lib/cardText";
 import { addCardFromTemplate, boardTemplates, saveAsTemplate } from "@/lib/templates";
 import { useBackgroundImageOk } from "@/hooks/useBackgroundImageOk";
-import { useBoard } from "@/hooks/useBoard";
+import { useBoard, useBoards } from "@/hooks/useBoard";
 import { useSummaryCollapsed } from "@/hooks/useSummaryCollapsed";
 import { AddCardForm } from "./AddCardForm";
 import { ArchivePanel } from "@/components/panels/ArchivePanel";
@@ -58,7 +58,20 @@ import { UndoToast } from "./UndoToast";
 import { ViewSwitch } from "@/components/views/ViewSwitch";
 import { ArchiveIcon, Button, SortIcon } from "@/components/ui";
 
+// Changes made before the boards have loaded would be lost, so the board only shows once they are here.
 export function Board() {
+  const { ready } = useBoards();
+  if (!ready) {
+    return (
+      <p role="status" className="text-sm text-zinc-500">
+        Loading your board…
+      </p>
+    );
+  }
+  return <BoardContent />;
+}
+
+function BoardContent() {
   const [board, update] = useBoard();
   const [query, setQuery] = useState("");
   const [openCardId, setOpenCardId] = useState<string | null>(null);

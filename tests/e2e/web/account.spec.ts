@@ -4,13 +4,11 @@ const PASSWORD = "test-password-123";
 const NEW_PASSWORD = "another-password-456";
 
 const uniqueEmail = () => `e2e-account-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.test`;
-const accountNav = (page: Page) => page.getByRole("navigation", { name: "Account" });
 // Next.js adds its own role="alert" route announcer, so scope to the page's messages.
 const formAlert = (page: Page) => page.locator("form").getByRole("alert");
 
 const register = async (page: Page, email: string) => {
-  await page.goto("./");
-  await accountNav(page).getByRole("link", { name: "Register" }).click();
+  await page.goto("register");
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Register", exact: true }).click();
@@ -18,8 +16,7 @@ const register = async (page: Page, email: string) => {
 };
 
 const login = async (page: Page, email: string, password: string) => {
-  await page.goto("./");
-  await accountNav(page).getByRole("link", { name: "Log in" }).click();
+  await page.goto("login");
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Log in", exact: true }).click();
@@ -87,11 +84,8 @@ test("change password: errors, then success keeps this session and ends other on
   await expect(page.getByText(email)).toBeVisible();
 });
 
-test("delete account: wrong password, cancel, then delete returns home and keeps local boards", async ({ page }) => {
+test("delete account: wrong password, cancel, then delete returns to the login page", async ({ page }) => {
   const email = uniqueEmail();
-  await page.goto("./");
-  await page.getByLabel("New card title").fill("Local card");
-  await page.getByRole("button", { name: "Add card" }).click();
   await register(page, email);
   await openAccount(page);
   await expect(page.getByText(/cannot be\s+undone/).first()).toBeVisible();
@@ -111,8 +105,8 @@ test("delete account: wrong password, cancel, then delete returns home and keeps
   await page.getByRole("button", { name: "Delete account", exact: true }).click();
   await page.getByRole("button", { name: "Yes, delete my account" }).click();
   await expect.poll(() => new URL(page.url()).pathname).not.toContain("/account");
-  await expect(accountNav(page).getByRole("link", { name: "Log in" })).toBeVisible();
-  await expect(page.getByRole("region", { name: /^To do/ }).getByText("Local card")).toBeVisible();
+  await expect(page).toHaveURL(/\/login/);
+  await expect(page.getByRole("heading", { level: 1, name: "Log in" })).toBeVisible();
 
   await login(page, email, PASSWORD);
   await expect(page.locator("form").getByRole("alert")).toHaveText("Invalid email or password.");
@@ -131,7 +125,7 @@ test("deleting one account leaves another account working", async ({ page, brows
     await page.getByLabel("Password to confirm deletion").fill(PASSWORD);
     await page.getByRole("button", { name: "Delete account", exact: true }).click();
     await page.getByRole("button", { name: "Yes, delete my account" }).click();
-    await expect(accountNav(page).getByRole("link", { name: "Log in" })).toBeVisible();
+    await expect(page).toHaveURL(/\/login/);
 
     await otherPage.reload();
     await expect(otherPage.getByText(bystander)).toBeVisible();

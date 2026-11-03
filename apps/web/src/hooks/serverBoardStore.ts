@@ -1,11 +1,11 @@
 "use client";
 
-import { boardDetailSchema, boardSummarySchema, DEFAULT_BOARD_NAME, type BoardDetail, type BoardSummary } from "@adt/contracts";
+import { boardDetailSchema, boardSummarySchema, DEFAULT_BOARD_NAME, DEFAULT_LIST_NAMES, type BoardDetail, type BoardSummary } from "@adt/contracts";
 import { useSyncExternalStore } from "react";
 import { z } from "zod";
 import { apiRequest, importBoard } from "@/lib/api-client";
 import type { Board } from "@/lib/board";
-import { detailToBoard } from "@/lib/boardDetail";
+import { detailToBoard, withClientIds } from "@/lib/boardDetail";
 import { diffBoard, runOperations } from "@/lib/boardSync";
 import { currentEntry, initialBoardList, validateBoardName, type NameResult } from "@/lib/boards";
 import { toImportRequest } from "@/lib/localImport";
@@ -63,6 +63,8 @@ interface Queue {
   generation: number;
   // client id -> server id, for what this board made up since its last refetch.
   ids: Map<string, string>;
+  // Something was created since the shown board was last replaced by the server's copy.
+  swapNeeded: boolean;
 }
 
 const queues = new Map<string, Queue>();
@@ -70,7 +72,7 @@ const queues = new Map<string, Queue>();
 function queueFor(boardId: string): Queue {
   let queue = queues.get(boardId);
   if (!queue) {
-    queue = { chain: Promise.resolve(), pending: 0, generation: 0, ids: new Map() };
+    queue = { chain: Promise.resolve(), pending: 0, generation: 0, ids: new Map(), swapNeeded: false };
     queues.set(boardId, queue);
   }
   return queue;
@@ -101,15 +103,42 @@ function storeId(id: string) {
 }
 
 const fetchList = () => apiRequest("/boards", { schema: z.array(boardSummarySchema) });
-const fetchDetail = (id: string) => apiRequest(`/boards/${encodeURIComponent(id)}`, { schema: boardDetailSchema });
+// A board without a stored Doing / Done choice finds those lists by name, which stops working once one is renamed.
+// So the lists found by name are stored the first time the board is read. Best effort: a failure changes nothing.
+async function storeInsightsDefaults(detail: BoardDetail): Promise<BoardDetail> {
+  const { doingListId, doneListId } = detail.settings;
+  if (doingListId !== null || doneListId !== null) {
+    return detail;
+  }
+  const named = (name: string) => detail.lists.find((l) => l.name.trim().toLowerCase() === name)?.id ?? null;
+  const doing = named("doing");
+  const done = named("done");
+  if (doing === null && done === null) {
+    return detail;
+  }
+  try {
+    await apiRequest(`/boards/${encodeURIComponent(detail.id)}/settings`, {
+      method: "PATCH",
+      body: { ...(doing !== null && { doingListId: doing }), ...(done !== null && { doneListId: done }) },
+    });
+  } catch {
+    return detail;
+  }
+  return { ...detail, settings: { ...detail.settings, doingListId: doing, doneListId: done } };
+}
+
+const fetchDetail = async (id: string) =>
+  storeInsightsDefaults(await apiRequest(`/boards/${encodeURIComponent(id)}`, { schema: boardDetailSchema }));
 
 const summaries = (boards: BoardSummary[]) => boards.map(({ id, name }) => ({ id, name }));
 
 // Shows a fetched board if it is still the one being looked at.
 function showDetail(detail: BoardDetail) {
   if (detail.id === state.currentId) {
-    queueFor(detail.id).ids.clear();
-    setState({ board: detailToBoard(detail) });
+    const queue = queueFor(detail.id);
+    // Cards the client made up keep their ids on screen (an open card dialog stays open); `ids` still maps them.
+    queue.swapNeeded = false;
+    setState({ board: withClientIds(detailToBoard(detail), queue.ids) });
   }
 }
 
@@ -148,7 +177,7 @@ async function recover(error: unknown, boardId: string) {
     state = { ...state, boards: summaries(list), currentId: id };
     storeId(id);
     queueFor(id).ids.clear();
-    setState({ board: detailToBoard(detail), error: message });
+    setState({ board: detailToBoard(detail), error: message, status: "ready" });
   } catch (refetchError) {
     setState({ status: "error", error: `${message} ${RELOAD_ERROR} ${messageOf(refetchError)}` });
   } finally {
@@ -166,9 +195,13 @@ function enqueue(boardId: string, job: () => Promise<void>) {
       if (generation !== queue.generation) {
         return;
       }
+      const known = queue.ids.size;
       await job();
+      if (queue.ids.size > known) {
+        queue.swapNeeded = true;
+      }
       // Creates left client ids behind: once nothing else is queued, swap in the server's board.
-      if (queue.ids.size > 0 && queue.pending === 1 && boardId === state.currentId) {
+      if (queue.swapNeeded && queue.pending === 1 && boardId === state.currentId) {
         const detail = await fetchDetail(boardId);
         if (queue.pending === 1) {
           showDetail(detail);
@@ -221,12 +254,18 @@ async function boardCall(work: () => Promise<void>) {
   }
 }
 
+// While another board loads the shown one is hidden: a change made then would go to the board being left.
+function beginSwitch() {
+  setState({ status: "loading" });
+}
+
 async function switchTo(id: string) {
-  const detail = await fetchDetail(id);
+  // Remembered at once, so a reload before the board has arrived still opens it.
   storeId(id);
+  const detail = await fetchDetail(id);
   state = { ...state, currentId: id };
   queueFor(id).ids.clear();
-  setState({ board: detailToBoard(detail), error: null });
+  setState({ board: detailToBoard(detail), error: null, status: "ready" });
 }
 
 function addBoard(summary: BoardSummary) {
@@ -236,9 +275,14 @@ function addBoard(summary: BoardSummary) {
 function createBoard(name: string): NameResult {
   const result = validateBoardName(name, state.boards);
   if (result.ok) {
+    beginSwitch();
     void boardCall(async () => {
       const created = await apiRequest("/boards", { method: "POST", body: { name: result.name }, schema: boardSummarySchema });
       addBoard(created);
+      // The API makes an empty board: give it the same three lists as the first one.
+      for (const listName of DEFAULT_LIST_NAMES) {
+        await apiRequest(`/boards/${encodeURIComponent(created.id)}/lists`, { method: "POST", body: { name: listName } });
+      }
       await switchTo(created.id);
     });
   }
@@ -258,6 +302,7 @@ function renameBoard(id: string, name: string): NameResult {
 
 function duplicateBoard() {
   const id = state.currentId;
+  beginSwitch();
   void boardCall(async () => {
     const copy = await apiRequest(`/boards/${encodeURIComponent(id)}/duplicate`, { method: "POST", schema: boardSummarySchema });
     addBoard(copy);
@@ -273,7 +318,7 @@ function deleteBoard(id: string) {
   const remaining = state.boards.filter((b) => b.id !== id);
   const wasCurrent = id === state.currentId;
   const neighbour = remaining[Math.min(index, remaining.length - 1)];
-  setState({ boards: remaining });
+  setState({ boards: remaining, ...(wasCurrent && { status: "loading" as const }) });
   void boardCall(async () => {
     await apiRequest(`/boards/${encodeURIComponent(id)}`, { method: "DELETE" });
     queues.delete(id);
@@ -287,10 +332,12 @@ function selectBoard(id: string) {
   if (id === state.currentId || !state.boards.some((b) => b.id === id)) {
     return;
   }
+  beginSwitch();
   void boardCall(() => switchTo(id));
 }
 
 function importBoardFile(board: Board, name: string) {
+  beginSwitch();
   void boardCall(async () => {
     const { board: detail } = await importBoard(toImportRequest({ id: "import", name, board }, globalThis.crypto.randomUUID()));
     addBoard(detail);

@@ -18,21 +18,25 @@ const fillAndSubmit = async (page: Page, email: string, password: string, submit
 };
 
 const register = async (page: Page, email: string, password = PASSWORD) => {
-  await page.goto("./");
-  await accountNav(page).getByRole("link", { name: "Register" }).click();
+  await page.goto("register");
   await fillAndSubmit(page, email, password, "Register");
 };
 
 const login = async (page: Page, email: string, password = PASSWORD) => {
-  await page.goto("./");
-  await accountNav(page).getByRole("link", { name: "Log in" }).click();
+  await page.goto("login");
   await fillAndSubmit(page, email, password, "Log in");
+};
+
+// The board needs a session: logging out lands on the login page.
+const expectLoggedOut = async (page: Page, email: string) => {
+  await expect(page).toHaveURL(/\/login/);
+  await expect(page.getByRole("heading", { level: 1, name: "Log in" })).toBeVisible();
+  await expect(page.getByText(email)).toHaveCount(0);
 };
 
 const logout = async (page: Page, email: string) => {
   await page.getByRole("button", { name: "Log out" }).click();
-  await expect(accountNav(page).getByRole("link", { name: "Log in" })).toBeVisible();
-  await expect(page.getByText(email)).toHaveCount(0);
+  await expectLoggedOut(page, email);
 };
 
 const expectLoggedIn = async (page: Page, email: string) => {
@@ -50,8 +54,7 @@ test("register, stay logged in after reload, then log out", async ({ page }) => 
 
   await logout(page, email);
   await page.reload();
-  await expect(accountNav(page).getByRole("link", { name: "Log in" })).toBeVisible();
-  await expect(page.getByText(email)).toHaveCount(0);
+  await expectLoggedOut(page, email);
 });
 
 test("logs in with a seeded account and stays logged in after reload", async ({ page }) => {
@@ -76,7 +79,7 @@ test("register errors: duplicate email and weak password", async ({ page }) => {
   await fillAndSubmit(page, uniqueEmail(), "123456789", "Register");
   await expect(formAlert(page)).toContainText("at least 10 characters");
   await page.goto("./");
-  await expect(accountNav(page).getByRole("link", { name: "Log in" })).toBeVisible();
+  await expect(page).toHaveURL(/\/login/);
 });
 
 test("login errors: wrong password and unknown email show the same message", async ({ page }) => {
@@ -126,26 +129,24 @@ test("session cookie is httpOnly and the old session dies on the server after lo
   }
 });
 
-test("the board works the same logged out and logged in", async ({ page }) => {
+test("the board needs a login, and an account's cards are there again after logging back in", async ({ page }) => {
   const todo = page.getByRole("region", { name: /^To do/ });
-  const addCard = async (title: string) => {
-    await page.getByLabel("New card title").fill(title);
-    await page.getByRole("button", { name: "Add card" }).click();
-    await expect(todo.getByText(title)).toBeVisible();
-  };
 
   await page.goto("./");
-  await addCard("Before login");
-  await page.reload();
-  await expect(todo.getByText("Before login")).toBeVisible();
+  await expect(page).toHaveURL(/\/login/);
+  await expect(page.getByLabel("New card title")).toHaveCount(0);
 
   const email = uniqueEmail();
   await register(page, email);
   await expectLoggedIn(page, email);
-  await expect(todo.getByText("Before login")).toBeVisible();
-  await addCard("While logged in");
+  await page.getByLabel("New card title").fill("While logged in");
+  await page.getByRole("button", { name: "Add card" }).click();
+  await expect(todo.getByText("While logged in")).toBeVisible();
 
   await logout(page, email);
-  await expect(todo.getByText("Before login")).toBeVisible();
+  await expect(page.getByText("While logged in")).toHaveCount(0);
+
+  await login(page, email);
+  await expectLoggedIn(page, email);
   await expect(todo.getByText("While logged in")).toBeVisible();
 });

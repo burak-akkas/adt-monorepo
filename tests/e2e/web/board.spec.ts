@@ -1,7 +1,8 @@
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { deleteCardViaDialog, moveCardTo } from "../../support/cardActions";
+import { expect, test } from "../../support/fixtures";
 
-// Every test gets a fresh browser context, so localStorage starts empty.
+// Every test gets its own signed-in user with one empty board, so tests can run in parallel.
 // page.goto("./") resolves against baseURL, which also works for PR previews under /<repo>/pr-N/.
 
 const column = (page: Page, name: string) => page.getByRole("region", { name: new RegExp(`^${name}`) });
@@ -11,7 +12,8 @@ async function addCard(page: Page, title: string) {
   await page.getByRole("button", { name: "Add card" }).click();
 }
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, seedBoard }) => {
+  await seedBoard();
   await page.goto("./");
   await expect(page.getByRole("heading", { level: 1, name: "Kanban" })).toBeVisible();
 });

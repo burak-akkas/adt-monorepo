@@ -58,7 +58,8 @@ test("keeps the checklist through export and import", async ({ page }, testInfo)
   await expect(page.getByRole("img", { name: /checklist items done/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Settings" }).click();
   await settings.getByLabel("Import board file").setInputFiles(path);
-  await settings.getByRole("button", { name: "Replace" }).click();
+  // The import adds the file as a new board and opens it.
+  await settings.getByRole("button", { name: "Add", exact: true }).click();
   await settings.getByRole("button", { name: "Close" }).click();
   await expect(page.getByRole("img", { name: "0 of 1 checklist items done" })).toBeVisible();
 });
