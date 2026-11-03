@@ -1,6 +1,6 @@
 import type { BoardDetail } from "@adt/contracts";
 import { describe, expect, it } from "vitest";
-import { boardLists } from "@/lib/board";
+import { boardLists, type Board, type Card } from "@/lib/board";
 import { detailToBoard } from "@/lib/boardDetail";
 
 const AT = "2026-01-02T03:04:05.000Z";
@@ -63,7 +63,73 @@ function detail(): BoardDetail {
   } as BoardDetail;
 }
 
+// The inverse of `detailToBoard`, only needed to prove the mapping loses nothing.
+function boardToDetail(board: Board): BoardDetail {
+  const toServerCard = (c: Card, listId: string, position: number) => ({
+    id: c.id,
+    listId,
+    title: c.title,
+    priority: c.priority,
+    cover: c.cover ?? null,
+    dueDate: c.dueDate ?? null,
+    notes: c.notes ?? null,
+    position,
+    createdAt: c.createdAt,
+    labels: c.labels ?? [],
+    checklist: (c.checklist ?? []).map((item, index) => ({ ...item, position: index })),
+    comments: (c.comments ?? []).map((m) => ({ id: m.id, text: m.text, createdAt: m.createdAt, editedAt: m.editedAt ?? null })),
+    activity: c.activity ?? [],
+  });
+  return {
+    id: "b1",
+    name: "Board",
+    createdAt: AT,
+    updatedAt: AT,
+    lists: boardLists(board).map((list, index) => ({
+      id: list.id,
+      boardId: "b1",
+      name: list.name,
+      position: index,
+      wipLimit: board.wipLimits?.[list.id] ?? null,
+      collapsed: board.collapsedLists?.includes(list.id) ?? false,
+      cards: (board.columns[list.id] ?? []).map((c, position) => toServerCard(c, list.id, position)),
+    })),
+    settings: {
+      background: board.background ?? null,
+      view: board.view ?? "board",
+      collapsedListIds: board.collapsedLists ?? [],
+      doingListId: board.insightsLists?.doing ?? null,
+      doneListId: board.insightsLists?.done ?? null,
+    },
+    formerLists: board.formerLists ?? {},
+    templates: (board.templates ?? []).map((t) => ({
+      id: t.id,
+      boardId: "b1",
+      name: t.name,
+      title: t.title,
+      priority: t.priority,
+      notes: t.notes ?? null,
+      labels: t.labels ?? [],
+      cover: t.cover ?? null,
+      checklist: (t.checklist ?? []).map((i) => i.text),
+      createdAt: AT,
+    })),
+    archive: board.archive.map((c) => ({ ...toServerCard(c, "l1", 0), boardId: "b1", archivedAt: AT })),
+  } as BoardDetail;
+}
+
 describe("detailToBoard", () => {
+  it("round-trips with the board it maps to", () => {
+    const withTemplate = detail();
+    withTemplate.templates = [
+      { id: "t1", boardId: "b1", name: "Bug", title: "Fix", priority: "high", notes: "n", labels: ["x"], cover: "red", checklist: ["a", "b"], createdAt: AT },
+    ];
+    const board = detailToBoard(withTemplate);
+    expect(detailToBoard(boardToDetail(board))).toEqual(board);
+    const plain = detailToBoard(detail());
+    expect(detailToBoard(boardToDetail(plain))).toEqual(plain);
+  });
+
   it("orders lists, cards and checklist items by position", () => {
     const board = detailToBoard(detail());
     expect(boardLists(board).map((l) => l.id)).toEqual(["l1", "l2"]);

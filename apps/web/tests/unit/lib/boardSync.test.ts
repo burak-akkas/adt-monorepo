@@ -232,6 +232,71 @@ describe("runOperations", () => {
     expect(calls.at(-1)).toEqual({ path: "/cards/server-card", method: "PATCH", body: { title: "Newer" } });
   });
 
+  // The API's routes (from its controllers), `:x` standing for one path segment.
+  const ROUTES = [
+    "POST /boards/:x/lists",
+    "PATCH /lists/:x",
+    "POST /lists/:x/move",
+    "PUT /lists/:x/wip-limit",
+    "PUT /lists/:x/cards/order",
+    "POST /lists/:x/archive",
+    "DELETE /lists/:x",
+    "POST /lists/:x/cards",
+    "GET /cards/:x",
+    "PATCH /cards/:x",
+    "POST /cards/:x/move",
+    "POST /cards/:x/duplicate",
+    "DELETE /cards/:x",
+    "POST /cards/:x/labels",
+    "DELETE /cards/:x/labels/:x",
+    "POST /cards/:x/checklist",
+    "PUT /cards/:x/checklist/order",
+    "PATCH /cards/:x/checklist/:x",
+    "DELETE /cards/:x/checklist/:x",
+    "POST /cards/:x/comments",
+    "PATCH /cards/:x/comments/:x",
+    "DELETE /cards/:x/comments/:x",
+    "POST /cards/:x/archive",
+    "POST /archive/:x/restore",
+    "DELETE /archive/:x",
+    "DELETE /boards/:x/archive",
+    "POST /boards/:x/templates",
+    "PATCH /templates/:x",
+    "DELETE /templates/:x",
+    "PATCH /boards/:x/settings",
+  ];
+
+  it.each(Object.entries(ACTIONS))("only calls endpoints that exist for %s", async (_name, action) => {
+    const before = start();
+    const operations = [...diffBoard(before, action(before)), ...diffBoard(action(before), before)];
+    let counter = 0;
+    const seen: string[] = [];
+    const request = async (path: string, options?: { method?: string }) => {
+      seen.push(`${options?.method} ${path}`);
+      counter += 1;
+      return {
+        id: `srv${counter}`,
+        checklist: [],
+        comments: [],
+      };
+    };
+    await runOperations(operations, { boardId: "b1", ids: new Map(), request: request as never });
+    for (const call of seen) {
+      const [method, path] = call.split(" ");
+      const segments = path.split("/").slice(1);
+      const known = ROUTES.some((route) => {
+        const [routeMethod, routePath] = route.split(" ");
+        const routeSegments = routePath.split("/").slice(1);
+        return (
+          routeMethod === method &&
+          routeSegments.length === segments.length &&
+          routeSegments.every((s, i) => s === ":x" || s === segments[i])
+        );
+      });
+      expect(known, call).toBe(true);
+    }
+  });
+
   it("stops at the first failure", async () => {
     const request = vi.fn().mockRejectedValueOnce(new Error("boom"));
     await expect(
