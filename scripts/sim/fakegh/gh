@@ -120,6 +120,14 @@ def merge_audit(n, it):
 
 
 def add_comment(n, body, user=BOT):
+    m = re.search(r"<!-- agent:ready-to-merge ([0-9a-f]{40}) -->", body)
+    if m and user == BOT:   # the Integrator hands a PR to a human to merge: it must be as good as one it would merge itself
+        it = item(n)
+        audit, bad = merge_audit(n, it)
+        bad += [] if m.group(1) == it["head"] else ["names_head"]
+        st.setdefault("handoff_audit", []).append(dict(audit, problems=bad))
+        if bad:
+            violation("unsafe-handoff", pr=int(n), problems=bad)
     c = {"id": len(st["comments_all"]) + 1, "body": body, "user": {"id": user}, "created_at": tick()}
     st["comments_all"].append(c)
     item(n).setdefault("comments", []).append(c["id"])
@@ -333,16 +341,7 @@ if cmd == "pr":
                if it.get("kind", "pr") == "pr" and it.get("state", "OPEN") in states and (not label or label in it.get("labels", []))]
         emit(out)
     if sub == "comment":
-        body = opt("--body") if "--body" in args else open(opt("--body-file")).read()
-        m = re.search(r"<!-- agent:ready-to-merge ([0-9a-f]{40}) -->", body)
-        if m:   # the Integrator hands a PR to a human to merge: it must be as good as one it would merge itself
-            it = item(args[2])
-            audit, bad = merge_audit(args[2], it)
-            bad += [] if m.group(1) == it["head"] else ["names_head"]
-            st.setdefault("handoff_audit", []).append(dict(audit, problems=bad))
-            if bad:
-                violation("unsafe-handoff", pr=int(args[2]), problems=bad)
-        add_comment(args[2], body)
+        add_comment(args[2], opt("--body") if "--body" in args else open(opt("--body-file")).read())
         done()
     if sub == "checks":
         if st.get("bump_base_on_checks", 0) > 0:   # a human merges something while CI runs

@@ -120,6 +120,8 @@ class HumanMergesTest(unittest.TestCase):
         self.assertEqual(q.gh.merged(), [])
         self.assertEqual(q.gh.agent_labels(101), ["agent:needs-human"])
         self.assertEqual(q.gh.violations(), [])  # the fake audits the handoff like a merge
+        with q.gh._edit() as st:
+            self.assertEqual([a["sha"] for a in st["handoff_audit"]], [head])
         body = next(b for b in reversed(q.gh.bodies(101)) if "agent:ready-to-merge" in b)
         self.assertIn(f"<!-- agent:ready-to-merge {head} -->", body)
         return body
@@ -167,6 +169,12 @@ class HumanMergesTest(unittest.TestCase):
         q = Queue(files=(".github/workflows/ci.yml", "src/a.ts", "scripts/x.sh"))
         self.assertEqual(q.run(), "handed")
         self.assertIn("changes the agent team's own tooling:\n- `.github/workflows/ci.yml`\n- `scripts/x.sh`", self.handed(q, q.head))
+
+    def test_the_fake_flags_a_handover_of_an_untested_commit(self) -> None:
+        q = Queue()
+        q.gh.checks("fail")
+        q.gh.comment(101, f"<!-- agent:ready-to-merge {q.head} -->")  # through gh, as the Integrator posts it
+        self.assertEqual([v["kind"] for v in q.gh.violations()], ["unsafe-handoff"])
 
     def test_allowed_explicitly_it_merges(self) -> None:
         q = Queue()
