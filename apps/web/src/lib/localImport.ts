@@ -115,28 +115,60 @@ export function hasLocalBoards(storage: Storage | undefined = globalThis.localSt
   }
 }
 
+export interface FailedBoard {
+  id: string;
+  name: string;
+  board: Board;
+  error: ApiError;
+  // True when trying again can help (network, server, rate limit); false for rejected content.
+  transient: boolean;
+}
+
 export type LocalImportResult =
   | { status: "nothing" }
-  | { status: "done"; imported: number; alreadyImported: number }
-  | { status: "failed"; error: ApiError; failedBoard: { id: string; name: string } };
+  | { status: "done"; imported: number; alreadyImported: number; failed: FailedBoard[] };
+
+export interface LockManagerLike {
+  request<T>(name: string, callback: () => Promise<T>): Promise<T>;
+}
 
 export interface ImportLocalOptions {
   storage?: Storage;
   importBoard?: typeof postBoard;
+  locks?: LockManagerLike;
 }
 
-// Posts every local board, one after the other. The local copy goes away only after all of them succeeded.
-export async function importLocalBoards({
-  storage = globalThis.localStorage,
-  importBoard = postBoard,
-}: ImportLocalOptions = {}): Promise<LocalImportResult> {
+export const IMPORT_LOCK_NAME = "kanban-local-import";
+
+export function isTransientError(error: ApiError): boolean {
+  return error.kind === "network" || error.kind === "server" || error.kind === "rate-limited";
+}
+
+function removeImportKey(storage: Storage, localId: string): void {
+  const rest = readKeys(storage);
+  delete rest[localId];
+  storage.setItem(IMPORT_KEYS_STORAGE_KEY, JSON.stringify(rest));
+}
+
+async function runImport(storage: Storage, importBoard: typeof postBoard): Promise<LocalImportResult> {
+  // Read inside the lock: a second tab that waited sees what the first one left.
   if (!hasLocalBoards(storage)) {
     return { status: "nothing" };
   }
-  const { boards } = loadBoards(storage);
+  const list = loadBoards(storage);
+  try {
+    // A legacy board gets a random id on every load; store it so its importKey stays the same between runs.
+    if (!storage.getItem(STORAGE_KEY)) {
+      storage.setItem(STORAGE_KEY, JSON.stringify(list));
+    }
+  } catch {
+    // Blocked storage: re-imports are still deduped by key where keys could be stored.
+  }
+  let remaining = list.boards;
   let imported = 0;
   let alreadyImported = 0;
-  for (const entry of boards) {
+  const failed: FailedBoard[] = [];
+  for (const entry of list.boards) {
     try {
       const { created } = await importBoard(toImportRequest(entry, getImportKey(entry.id, storage)));
       if (created) {
@@ -146,16 +178,43 @@ export async function importLocalBoards({
       }
     } catch (error) {
       const apiError = error instanceof ApiError ? error : new ApiError("network", 0, "The import failed.");
-      return { status: "failed", error: apiError, failedBoard: { id: entry.id, name: entry.name } };
+      failed.push({ id: entry.id, name: entry.name, board: entry.board, error: apiError, transient: isTransientError(apiError) });
+      continue;
+    }
+    // Only this board is on the server now: drop it from the browser, keep the others.
+    remaining = remaining.filter((b) => b.id !== entry.id);
+    try {
+      if (remaining.length > 0) {
+        const currentId = remaining.some((b) => b.id === list.currentId) ? list.currentId : remaining[0].id;
+        storage.setItem(STORAGE_KEY, JSON.stringify({ boards: remaining, currentId }));
+      }
+      removeImportKey(storage, entry.id);
+    } catch {
+      // The board is on the server; a re-import is deduped by its key.
     }
   }
-  try {
-    storage.removeItem(STORAGE_KEY);
-    storage.removeItem(IMPORT_KEYS_STORAGE_KEY);
-    // The legacy key is never removed (see storage.ts), so this marker keeps it from being imported again.
-    storage.setItem(IMPORT_DONE_STORAGE_KEY, "1");
-  } catch {
-    // The boards are on the server; a blocked storage only means the clean-up is retried (and deduped by key).
+  if (remaining.length === 0) {
+    try {
+      storage.removeItem(STORAGE_KEY);
+      storage.removeItem(IMPORT_KEYS_STORAGE_KEY);
+      // The legacy key is never removed (see storage.ts), so this marker keeps it from being imported again.
+      storage.setItem(IMPORT_DONE_STORAGE_KEY, "1");
+    } catch {
+      // The boards are on the server; a blocked storage only means the clean-up is retried (and deduped by key).
+    }
   }
-  return { status: "done", imported, alreadyImported };
+  return { status: "done", imported, alreadyImported, failed };
+}
+
+// Posts every local board on its own: a failing board does not stop the others.
+// Only the boards that made it to the server leave the browser. Calling it again retries the rest.
+export async function importLocalBoards({
+  storage = globalThis.localStorage,
+  importBoard = postBoard,
+  locks = globalThis.navigator?.locks,
+}: ImportLocalOptions = {}): Promise<LocalImportResult> {
+  if (locks) {
+    return locks.request(IMPORT_LOCK_NAME, () => runImport(storage, importBoard));
+  }
+  return runImport(storage, importBoard);
 }
