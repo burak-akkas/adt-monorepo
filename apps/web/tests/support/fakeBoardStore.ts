@@ -98,8 +98,9 @@ export function useServerBoards() {
     commit(duplicateBoardEntry(current, current.currentId));
   }, []);
   const deleteBoard = useCallback((id: string) => commit(deleteBoardEntry(getSnapshot(), id)), []);
+  const leaveBoard = deleteBoard;
   const selectBoard = useCallback((id: string) => commit(selectBoardEntry(getSnapshot(), id)), []);
-  return { boards, currentId: list.currentId, ready: true, createBoard, renameBoard, duplicateBoard, deleteBoard, selectBoard };
+  return { boards, currentId: list.currentId, ready: true, createBoard, renameBoard, duplicateBoard, deleteBoard, leaveBoard, selectBoard };
 }
 
 export function useServerSaveError() {

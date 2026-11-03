@@ -5,6 +5,23 @@ import { Board } from "@/components/board/Board";
 import { BoardSwitcher } from "@/components/app/BoardSwitcher";
 import { resetBoardStore } from "@/hooks/useBoard";
 
+// Boards (by name) the fake store should report as shared with the user as an editor.
+const editorBoards = vi.hoisted(() => new Set<string>());
+vi.mock("@/hooks/useBoard", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/hooks/useBoard")>();
+  return {
+    ...original,
+    useBoards: () => {
+      const api = original.useBoards();
+      return { ...api, boards: api.boards.map((b) => (editorBoards.has(b.name) ? { ...b, role: "editor" as const } : b)) };
+    },
+  };
+});
+vi.mock("@/lib/api-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api-client")>()),
+  listMembers: vi.fn(async () => ({ owner: { email: "owner@example.test" }, members: [] })),
+}));
+
 function setup() {
   const user = userEvent.setup();
   render(
@@ -522,5 +539,56 @@ describe("<BoardSwitcher />", () => {
     document.body.innerHTML = "";
     setup();
     expect(selectedName()).toBe("Work");
+  });
+});
+
+describe("<BoardSwitcher /> roles", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetBoardStore();
+    editorBoards.clear();
+  });
+  afterEach(() => editorBoards.clear());
+
+  const menuItems = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByRole("button", { name: "Board actions" }));
+    return screen.getAllByRole("menuitem").map((i) => i.textContent);
+  };
+
+  it("offers Share, Rename and Delete to the owner, and no Leave", async () => {
+    const { user } = setup();
+    const items = await menuItems(user);
+    expect(items).toEqual(expect.arrayContaining(["Share board", "Rename board", "Delete board"]));
+    expect(items).not.toContain("Leave board");
+    expect(screen.queryByRole("group", { name: "Shared with me" })).not.toBeInTheDocument();
+  });
+
+  it("shows only Leave to an editor, and groups the boards", async () => {
+    editorBoards.add("My board");
+    const { user } = setup();
+    expect(screen.getByRole("group", { name: "Shared with me" })).toBeInTheDocument();
+    const items = await menuItems(user);
+    expect(items).toContain("Leave board");
+    for (const hidden of ["Share board", "Rename board", "Delete board"]) {
+      expect(items).not.toContain(hidden);
+    }
+  });
+
+  it("opens the share dialog with the no-email notice, for the owner", async () => {
+    const { user } = setup();
+    await choose(user, "Share board");
+    const dialog = screen.getByRole("dialog", { name: "Share board" });
+    expect(within(dialog).getByText(/No email is sent/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("asks before leaving a board", async () => {
+    editorBoards.add("My board");
+    const { user } = setup();
+    await choose(user, "Leave board");
+    expect(screen.getByRole("dialog", { name: "Leave board" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

@@ -21,7 +21,8 @@ const RELOAD_ERROR = "Could not load your boards. Reload the page to try again."
 type Status = "loading" | "ready" | "error";
 
 interface State {
-  boards: { id: string; name: string }[];
+  // `role` is absent for a board the user owns.
+  boards: { id: string; name: string; role?: "owner" | "editor" }[];
   currentId: string;
   board: Board;
   status: Status;
@@ -142,7 +143,8 @@ async function storeInsightsDefaults(detail: BoardDetail): Promise<BoardDetail> 
 const fetchDetail = async (id: string) =>
   storeInsightsDefaults(await apiRequest(`/boards/${encodeURIComponent(id)}`, { schema: boardDetailSchema }));
 
-const summaries = (boards: BoardSummary[]) => boards.map(({ id, name }) => ({ id, name }));
+const summaries = (boards: BoardSummary[]) =>
+  boards.map(({ id, name, role }) => ({ id, name, ...(role !== undefined && { role }) }));
 
 // Shows a fetched board if it is still the one being looked at.
 function showDetail(detail: BoardDetail) {
@@ -344,7 +346,7 @@ async function switchTo(id: string) {
 }
 
 function addBoard(summary: BoardSummary) {
-  state = { ...state, boards: [...state.boards, { id: summary.id, name: summary.name }] };
+  state = { ...state, boards: [...state.boards, ...summaries([summary])] };
 }
 
 function createBoard(name: string): NameResult {
@@ -404,6 +406,23 @@ function deleteBoard(id: string) {
   });
 }
 
+// An editor stops having access. The list is read again, which also makes a default board if none is left.
+function leaveBoard(id: string) {
+  if (!state.boards.some((b) => b.id === id)) {
+    return;
+  }
+  const index = state.boards.findIndex((b) => b.id === id);
+  const remaining = state.boards.filter((b) => b.id !== id);
+  const wasCurrent = id === state.currentId;
+  const neighbour = remaining[Math.min(index, remaining.length - 1)];
+  setState({ boards: remaining, ...(wasCurrent && { status: "loading" as const }) });
+  void boardCall(async () => {
+    await apiRequest(`/boards/${encodeURIComponent(id)}/members/me`, { method: "DELETE" });
+    queues.delete(id);
+    await loadAll(wasCurrent ? (neighbour?.id ?? null) : state.currentId);
+  });
+}
+
 function selectBoard(id: string) {
   if (id === state.currentId || !state.boards.some((b) => b.id === id)) {
     return;
@@ -455,6 +474,7 @@ export function useServerBoards() {
     renameBoard,
     duplicateBoard,
     deleteBoard,
+    leaveBoard,
     selectBoard,
     importBoardFile,
   };

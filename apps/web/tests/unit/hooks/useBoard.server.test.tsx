@@ -54,7 +54,9 @@ function detailJson(id: string, name: string, cards: Json[] = [cardJson("c1", "l
   };
 }
 
-const summary = (id: string, name: string) => ({ id, name, createdAt: AT, updatedAt: AT });
+// Boards the fake user only has editor access to.
+let shared: Set<string>;
+const summary = (id: string, name: string) => ({ id, name, createdAt: AT, updatedAt: AT, ...(shared.has(id) && { role: "editor" }) });
 
 // What the fake server holds and what it was asked to do.
 let details: Record<string, Json>;
@@ -73,6 +75,7 @@ beforeEach(() => {
   resetBoardStore();
   details = { b1: detailJson("b1", "First"), b2: detailJson("b2", "Second", []) };
   calls = [];
+  shared = new Set();
   failing = new Set();
   errors = new Map();
   gates = new Map();
@@ -114,7 +117,11 @@ beforeEach(() => {
         details.b3 = detailJson("b3", "First (copy)");
         return summary("b3", "First (copy)");
       case "DELETE /boards/b1":
+      case "DELETE /boards/b1/members/me":
         delete details.b1;
+        return undefined;
+      case "DELETE /boards/b2/members/me":
+        delete details.b2;
         return undefined;
       default:
         return undefined;
@@ -447,6 +454,34 @@ describe("server mode: boards", () => {
     calls.length = 0;
     act(() => result.current.boards.deleteBoard("b2"));
     expect(calls).toEqual([]);
+  });
+
+  it("keeps the role of a shared board after a rename", async () => {
+    shared = new Set(["b2"]);
+    const { result } = await ready();
+    expect(result.current.boards.boards.map((b) => b.role)).toEqual([undefined, "editor"]);
+    act(() => void result.current.boards.renameBoard("b2", "Renamed"));
+    expect(result.current.boards.boards[1]).toEqual({ id: "b2", name: "Renamed", role: "editor" });
+  });
+
+  it("leaves the current board and selects a neighbour", async () => {
+    shared = new Set(["b1"]);
+    const { result } = await ready();
+    act(() => result.current.boards.leaveBoard("b1"));
+    await waitFor(() => expect(result.current.boards.currentId).toBe("b2"));
+    await waitFor(() => expect(result.current.boards.ready).toBe(true));
+    expect(calls).toContain("DELETE /boards/b1/members/me");
+    expect(result.current.boards.boards.map((b) => b.id)).toEqual(["b2"]);
+  });
+
+  it("makes a default board when the last one is left", async () => {
+    shared = new Set(["b1"]);
+    details = { b1: detailJson("b1", "First") };
+    const { result } = await ready();
+    act(() => result.current.boards.leaveBoard("b1"));
+    await waitFor(() => expect(result.current.boards.currentId).toBe("b3"));
+    expect(calls).toContain("DELETE /boards/b1/members/me");
+    expect(calls).toContain("POST /boards");
   });
 
   it("imports a file as a new board with a fresh import key", async () => {
