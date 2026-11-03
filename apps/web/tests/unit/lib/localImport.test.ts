@@ -9,7 +9,9 @@ import {
   IMPORT_DONE_STORAGE_KEY,
   IMPORT_KEYS_STORAGE_KEY,
   importLocalBoards,
+  isTransientError,
   toImportRequest,
+  type LockManagerLike,
 } from "@/lib/localImport";
 import { LEGACY_STORAGE_KEY, saveBoards, STORAGE_KEY } from "@/lib/storage";
 
@@ -190,7 +192,7 @@ describe("importLocalBoards", () => {
   it("imports every board, then removes the local copy", async () => {
     save([entry("b1", "A"), entry("b2", "B")]);
     const importBoard = vi.fn(ok());
-    expect(await importLocalBoards({ importBoard })).toEqual({ status: "done", imported: 2, alreadyImported: 0 });
+    expect(await importLocalBoards({ importBoard })).toEqual({ status: "done", imported: 2, alreadyImported: 0, failed: [] });
     expect(importBoard.mock.calls.map(([r]) => r.name)).toEqual(["A", "B"]);
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
     expect(localStorage.getItem(IMPORT_KEYS_STORAGE_KEY)).toBeNull();
@@ -199,33 +201,107 @@ describe("importLocalBoards", () => {
 
   it("counts boards the server already had", async () => {
     save([entry("b1", "A")]);
-    expect(await importLocalBoards({ importBoard: ok(false) })).toEqual({ status: "done", imported: 0, alreadyImported: 1 });
+    expect(await importLocalBoards({ importBoard: ok(false) })).toEqual({ status: "done", imported: 0, alreadyImported: 1, failed: [] });
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 
-  it("keeps the local copy when a board fails, even after an earlier one succeeded", async () => {
-    save([entry("b1", "A"), entry("b2", "B")]);
-    const before = localStorage.getItem(STORAGE_KEY);
+  it("imports the other boards when one fails, removes only those, and retries only the failed one", async () => {
+    save([entry("b1", "A"), entry("b2", "B"), entry("b3", "C")]);
+    let fail = true;
     const importBoard = vi.fn(async (request: ImportBoardRequest) => {
-      if (request.name === "B") {
+      if (request.name === "B" && fail) {
         throw new ApiError("validation", 400, "too many cards");
       }
       return ok()(request);
     });
     const result = await importLocalBoards({ importBoard });
-    expect(result).toMatchObject({ status: "failed", failedBoard: { id: "b2", name: "B" }, error: { kind: "validation", status: 400 } });
+    expect(result).toMatchObject({
+      status: "done",
+      imported: 2,
+      failed: [{ id: "b2", name: "B", transient: false, error: { kind: "validation", status: 400 } }],
+    });
+    expect(importBoard.mock.calls.map(([r]) => r.name)).toEqual(["A", "B", "C"]);
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}");
+    expect(stored.boards.map((b: BoardEntry) => b.id)).toEqual(["b2"]);
+    expect(stored.currentId).toBe("b2");
+    expect(Object.keys(JSON.parse(localStorage.getItem(IMPORT_KEYS_STORAGE_KEY) ?? "{}"))).toEqual(["b2"]);
+    expect(hasLocalBoards()).toBe(true);
+
+    fail = false;
+    importBoard.mockClear();
+    expect(await importLocalBoards({ importBoard })).toMatchObject({ status: "done", imported: 1, failed: [] });
+    expect(importBoard.mock.calls.map(([r]) => r.name)).toEqual(["B"]);
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+    expect(hasLocalBoards()).toBe(false);
+  });
+
+  it("keeps everything when every board fails", async () => {
+    save([entry("b1", "A")]);
+    const before = localStorage.getItem(STORAGE_KEY);
+    const result = await importLocalBoards({
+      importBoard: async () => {
+        throw new ApiError("server", 500, "down");
+      },
+    });
+    expect(result).toMatchObject({ status: "done", imported: 0, failed: [{ id: "b1", transient: true }] });
     expect(localStorage.getItem(STORAGE_KEY)).toBe(before);
     expect(hasLocalBoards()).toBe(true);
   });
 
-  it("treats an unexpected error as a failure and keeps the data", async () => {
+  it("classifies errors as transient or not", () => {
+    const transient = (kind: ApiError["kind"], status = 0) => isTransientError(new ApiError(kind, status, "x"));
+    expect([transient("network"), transient("server", 503), transient("rate-limited", 429)]).toEqual([true, true, true]);
+    expect([
+      transient("validation", 400),
+      transient("validation", 413),
+      transient("unauthorized", 401),
+      transient("forbidden", 403),
+      transient("not-found", 404),
+      transient("conflict", 409),
+      transient("invalid-response", 200),
+    ]).toEqual([false, false, false, false, false, false, false]);
+  });
+
+  it("treats an unexpected error as a transient network failure and keeps the data", async () => {
     save([entry("b1", "A")]);
     const result = await importLocalBoards({
       importBoard: async () => {
         throw new Error("boom");
       },
     });
-    expect(result).toMatchObject({ status: "failed", error: { kind: "network" } });
+    expect(result).toMatchObject({ status: "done", failed: [{ transient: true, error: { kind: "network" } }] });
     expect(localStorage.getItem(STORAGE_KEY)).not.toBeNull();
+  });
+
+  it("keeps one stable id and key for a legacy board across failed runs", async () => {
+    localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify({ columns: { todo: [], doing: [], done: [] } }));
+    const keys: string[] = [];
+    const failing = async (request: ImportBoardRequest): Promise<ImportBoardResponse> => {
+      keys.push(request.importKey);
+      throw new ApiError("network", 0, "down");
+    };
+    await importLocalBoards({ importBoard: failing });
+    const firstId = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}").boards[0].id;
+    await importLocalBoards({ importBoard: failing });
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}").boards[0].id).toBe(firstId);
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it("posts each board once when two runs overlap, with a serialising lock", async () => {
+    save([entry("b1", "A"), entry("b2", "B")]);
+    let tail: Promise<unknown> = Promise.resolve();
+    const locks: LockManagerLike = {
+      request: <T,>(_name: string, callback: () => Promise<T>) => {
+        const run = tail.then(callback);
+        tail = run.catch(() => undefined);
+        return run;
+      },
+    };
+    const importBoard = vi.fn(ok());
+    const [first, second] = await Promise.all([importLocalBoards({ importBoard, locks }), importLocalBoards({ importBoard, locks })]);
+    expect(first).toMatchObject({ status: "done", imported: 2 });
+    expect(second).toEqual({ status: "nothing" });
+    expect(importBoard).toHaveBeenCalledTimes(2);
   });
 
   it("sends the same keys when retried", async () => {
