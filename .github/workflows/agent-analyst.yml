@@ -50,7 +50,7 @@ jobs:
         id: before
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: echo "count=$(scripts/agents/count-comments.sh ${{ github.event.issue.number }} analyst)" >> "$GITHUB_OUTPUT"
+        run: echo "count=$(scripts/agents/agent.sh count-comments ${{ github.event.issue.number }} analyst)" >> "$GITHUB_OUTPUT"
 
       - uses: anthropics/claude-code-action@v1
         id: agent
@@ -95,20 +95,20 @@ jobs:
           AUTONOMY: ${{ vars.AGENT_AUTONOMY }}
         run: |
           decision=$(echo "${OUT:-null}" | jq -r '.decision // "error"')
-          after=$(scripts/agents/count-comments.sh "$N" analyst)
+          after=$(scripts/agents/agent.sh count-comments "$N" analyst)
           if [ "$after" -le "${BEFORE:-0}" ]; then
             echo "::warning::analyst returned '$decision' but posted no handoff comment"
             decision=missing-comment
           fi
           case "$decision" in
-            analyzed)     scripts/agents/transition.sh "$N" agent:analyzed ;;
+            analyzed)     scripts/agents/agent.sh transition "$N" agent:analyzed ;;
             needs-info)   if [ "$AUTONOMY" = "full" ]; then
-                            scripts/agents/transition.sh "$N" agent:needs-decision
+                            scripts/agents/agent.sh transition "$N" agent:needs-decision
                           else
-                            scripts/agents/transition.sh "$N" agent:needs-info
+                            scripts/agents/agent.sh transition "$N" agent:needs-info
                           fi ;;
-            out-of-scope) scripts/agents/transition.sh "$N" agent:out-of-scope ;;
-            *)            scripts/agents/transition.sh "$N" agent:needs-decision
+            out-of-scope) scripts/agents/agent.sh transition "$N" agent:out-of-scope ;;
+            *)            scripts/agents/agent.sh transition "$N" agent:needs-decision
                           gh issue comment "$N" --body "⚠️ Analyst agent failed ([run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Handing to the Lead." ;;
           esac
           case "$decision" in
@@ -117,4 +117,4 @@ jobs:
             out-of-scope) msg="out of scope (see above)" ;;
             *)            msg="failed, handed to the Lead" ;;
           esac
-          scripts/agents/progress.sh "$N" "🔍 **Analyst**: $msg"
+          scripts/agents/agent.sh progress "$N" "🔍 **Analyst**: $msg"

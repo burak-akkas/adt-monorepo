@@ -1,0 +1,373 @@
+{
+  "_comment": "Scenario profiles for matrix.py: prs = parallel PRs, params override team.py DEFAULTS. quick = part of the fast set (--quick, used in CI). legacy_ref = simulate the agent tooling of that commit instead (its merge gate if it predates the queue). expect = outcomes other than merged that are correct for this profile.",
+  "baseline": {
+    "prs": 4,
+    "params": {},
+    "quick": true
+  },
+  "8 parallel PRs": {
+    "prs": 8,
+    "params": {}
+  },
+  "12 parallel PRs": {
+    "prs": 12,
+    "params": {
+      "conflict": 0.2
+    }
+  },
+  "heavy conflicts": {
+    "prs": 6,
+    "params": {
+      "conflict": 0.7
+    },
+    "quick": true
+  },
+  "conflicts, no review skip": {
+    "prs": 5,
+    "params": {
+      "conflict": 0.5,
+      "skip_same": false
+    }
+  },
+  "flaky CI": {
+    "prs": 5,
+    "params": {
+      "ci_fail": 0.3,
+      "ci_hang": 0.1,
+      "ci_slow": 0.4
+    },
+    "quick": true
+  },
+  "required check never reports": {
+    "prs": 3,
+    "params": {
+      "ci_fail": 0,
+      "ci_hang": 0,
+      "ci_slow": 0,
+      "ci_none": 1.0
+    },
+    "expect": [
+      "needs-human"
+    ]
+  },
+  "lost webhooks (20%)": {
+    "prs": 5,
+    "params": {
+      "drop": 0.2
+    },
+    "quick": true
+  },
+  "duplicated deliveries (30%)": {
+    "prs": 5,
+    "params": {
+      "dup": 0.3
+    }
+  },
+  "API errors (3% of calls)": {
+    "prs": 5,
+    "params": {
+      "api_flake": 0.03
+    },
+    "quick": true
+  },
+  "Integrator job killed (40%)": {
+    "prs": 5,
+    "params": {
+      "kill_integrator": 0.4
+    },
+    "quick": true
+  },
+  "mergeability often UNKNOWN": {
+    "prs": 5,
+    "params": {
+      "unknown": 0.5
+    }
+  },
+  "merge API failures": {
+    "prs": 5,
+    "params": {
+      "merge_fail": 0.4,
+      "merge_err": 0.4
+    }
+  },
+  "base changes workflow files": {
+    "prs": 5,
+    "params": {
+      "workflow_change": 0.15
+    },
+    "expect": [
+      "needs-human"
+    ]
+  },
+  "humans push and merge by hand": {
+    "prs": 5,
+    "params": {
+      "human_base": 0.15,
+      "human_push": 0.1
+    },
+    "quick": true
+  },
+  "humans close, draft, approve": {
+    "prs": 6,
+    "params": {
+      "human_close": 0.03,
+      "human_draft": 0.03,
+      "human_approve": 0.08,
+      "human_lead": 0.05
+    },
+    "expect": [
+      "closed",
+      "draft"
+    ]
+  },
+  "high risk and protected paths": {
+    "prs": 6,
+    "params": {
+      "risk_high": 0.3,
+      "protected": 0.3
+    },
+    "expect": [
+      "needs-human"
+    ]
+  },
+  "pause window": {
+    "prs": 5,
+    "params": {
+      "pause_window": [
+        8,
+        30
+      ]
+    }
+  },
+  "merging switched off a while": {
+    "prs": 5,
+    "params": {
+      "automerge_off_window": [
+        10,
+        40
+      ]
+    }
+  },
+  "QA on base update (hold)": {
+    "prs": 5,
+    "params": {
+      "qa_on_update": true,
+      "qa_stage": "review"
+    },
+    "quick": true
+  },
+  "long queue, short drain budget": {
+    "prs": 8,
+    "params": {
+      "drain_minutes": 15,
+      "review_ok": 1,
+      "qa_ok": 1,
+      "conflict": 0.1
+    }
+  },
+  "agents struggle": {
+    "prs": 5,
+    "params": {
+      "review_ok": 0.5,
+      "qa_ok": 0.5,
+      "impl_blocked": 0.2,
+      "lead_fix": 0.6
+    }
+  },
+  "everything bad at once": {
+    "prs": 6,
+    "params": {
+      "conflict": 0.5,
+      "ci_fail": 0.2,
+      "ci_hang": 0.05,
+      "ci_slow": 0.4,
+      "drop": 0.1,
+      "dup": 0.1,
+      "api_flake": 0.02,
+      "unknown": 0.2,
+      "kill_integrator": 0.2,
+      "merge_fail": 0.2,
+      "merge_err": 0.2,
+      "human_base": 0.08,
+      "human_push": 0.05,
+      "review_ok": 0.6,
+      "qa_ok": 0.6,
+      "impl_blocked": 0.1
+    },
+    "quick": true
+  },
+  "slow agents (real races)": {
+    "prs": 5,
+    "params": {
+      "agent_time": 2.0
+    },
+    "quick": true
+  },
+  "slow agents, heavy conflicts": {
+    "prs": 6,
+    "params": {
+      "agent_time": 2.0,
+      "conflict": 0.7
+    }
+  },
+  "slow agents, 8 PRs": {
+    "prs": 8,
+    "params": {
+      "agent_time": 1.5
+    }
+  },
+  "slow agents, QA hold": {
+    "prs": 5,
+    "params": {
+      "agent_time": 1.5,
+      "qa_on_update": true,
+      "qa_stage": "review"
+    }
+  },
+  "slow agents, everything bad": {
+    "prs": 6,
+    "params": {
+      "agent_time": 1.5,
+      "conflict": 0.5,
+      "ci_fail": 0.2,
+      "ci_hang": 0.05,
+      "ci_slow": 0.4,
+      "drop": 0.1,
+      "dup": 0.1,
+      "api_flake": 0.02,
+      "unknown": 0.2,
+      "kill_integrator": 0.2,
+      "merge_fail": 0.2,
+      "merge_err": 0.2,
+      "human_base": 0.08,
+      "human_push": 0.05,
+      "review_ok": 0.6,
+      "qa_ok": 0.6,
+      "impl_blocked": 0.1
+    }
+  },
+  "before the queue: 4 PRs": {
+    "prs": 4,
+    "params": {
+      "human_base": 0,
+      "human_push": 0
+    },
+    "legacy_ref": "5673863"
+  },
+  "with the queue: 4 PRs": {
+    "prs": 4,
+    "params": {
+      "human_base": 0,
+      "human_push": 0
+    }
+  },
+  "before the queue: 8 PRs": {
+    "prs": 8,
+    "params": {
+      "human_base": 0,
+      "human_push": 0
+    },
+    "legacy_ref": "5673863"
+  },
+  "with the queue: 8 PRs": {
+    "prs": 8,
+    "params": {
+      "human_base": 0,
+      "human_push": 0
+    }
+  },
+  "before the queue: slow agents": {
+    "prs": 5,
+    "params": {
+      "agent_time": 2.0,
+      "human_base": 0,
+      "human_push": 0
+    },
+    "legacy_ref": "5673863"
+  },
+  "with the queue: slow agents": {
+    "prs": 5,
+    "params": {
+      "agent_time": 2.0,
+      "human_base": 0,
+      "human_push": 0
+    }
+  },
+  "before the sweep fix: slow agents, conflicts": {
+    "prs": 6,
+    "params": {
+      "agent_time": 2.0,
+      "conflict": 0.7,
+      "human_base": 0,
+      "human_push": 0
+    },
+    "legacy_ref": "cf7c972"
+  },
+  "with the sweep fix: slow agents, conflicts": {
+    "prs": 6,
+    "params": {
+      "agent_time": 2.0,
+      "conflict": 0.7,
+      "human_base": 0,
+      "human_push": 0
+    }
+  },
+  "QA before the queue (stage review)": {
+    "prs": 5,
+    "params": {
+      "qa_stage": "review"
+    },
+    "quick": true
+  },
+  "QA off": {
+    "prs": 4,
+    "params": {
+      "qa": false
+    },
+    "quick": true
+  },
+  "QA in the queue: agents struggle": {
+    "prs": 5,
+    "params": {
+      "review_ok": 0.5,
+      "qa_ok": 0.4,
+      "impl_blocked": 0.1
+    }
+  },
+  "before QA in the queue: 4 PRs, conflicts": {
+    "prs": 4,
+    "params": {
+      "conflict": 0.5,
+      "human_base": 0,
+      "human_push": 0
+    },
+    "legacy_ref": "9bef895"
+  },
+  "with QA in the queue: 4 PRs, conflicts": {
+    "prs": 4,
+    "params": {
+      "conflict": 0.5,
+      "human_base": 0,
+      "human_push": 0
+    }
+  },
+  "before QA in the queue: slow agents, heavy conflicts": {
+    "prs": 6,
+    "params": {
+      "agent_time": 2.0,
+      "conflict": 0.7,
+      "human_base": 0,
+      "human_push": 0
+    },
+    "legacy_ref": "9bef895"
+  },
+  "with QA in the queue: slow agents, heavy conflicts": {
+    "prs": 6,
+    "params": {
+      "agent_time": 2.0,
+      "conflict": 0.7,
+      "human_base": 0,
+      "human_push": 0
+    }
+  }
+}

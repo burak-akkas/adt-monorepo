@@ -100,7 +100,7 @@ jobs:
           mkdir -p .agent-out/screenshots
           printf '.agent-out/\n.agent-trusted/\n.gh-pages/\n' >> .git/info/exclude
           # A queued run may be stale by now (new commits, merge-gate verdict, conflict): don't spend a round on it.
-          skip=$("$BIN/pr-still-current.sh" "$PR" "$HEAD_SHA" agent:qa)
+          skip=$("$BIN/agent.sh" pr-still-current "$PR" "$HEAD_SHA" agent:qa)
           if [ -n "$skip" ]; then
             echo "Skipped QA: ${skip#skip=}" | tee -a "$GITHUB_STEP_SUMMARY"
             echo "stop=true" >> "$GITHUB_OUTPUT"
@@ -128,7 +128,7 @@ jobs:
             | [$c | to_entries[] | select(.key > $last and (.value.body | contains("<!-- agent:qa -->"))
                 and (.value.body | test("\\*\\*Verdict:\\*\\*\\s*pass") | not))] | length')
           if [ "$failed" -ge "$MAX_ROUNDS" ]; then
-            "$BIN/transition.sh" "$PR" agent:needs-decision
+            "$BIN/agent.sh" transition "$PR" agent:needs-decision
             gh pr comment "$PR" --body "🛑 $MAX_ROUNDS QA rounds without a pass. Handing to the Lead."
             echo "stop=true" >> "$GITHUB_OUTPUT"
           fi
@@ -143,9 +143,9 @@ jobs:
           AGENT_REQUIRED_CHECKS: ${{ vars.AGENT_REQUIRED_CHECKS || 'CI' }}
         run: |
           # Same rules as the merge queue: only the required workflows that apply to the files this PR
-          # changes count (pr-paths.sh). Up to 25 minutes; on timeout QA runs anyway (the merge queue
+          # changes count (agent.sh pr-paths). Up to 25 minutes; on timeout QA runs anyway (the merge queue
           # still waits for the checks).
-          REQUIRED=$("$BIN/pr-paths.sh" required "$PR" | paste -sd, -)
+          REQUIRED=$("$BIN/agent.sh" pr-paths required "$PR" | paste -sd, -)
           if [ -z "$REQUIRED" ]; then echo "result=pass" >> "$GITHUB_OUTPUT"; exit 0; fi
           filter='[.[] | select(.workflow as $w | ($req | split(",") | map(gsub("^ +| +$"; ""))) | index($w))]'
           for _ in $(seq 1 50); do
@@ -377,7 +377,7 @@ jobs:
           [ ${#files[@]} -eq 0 ] && { echo "No screenshots"; exit 0; }
           dir="qa/pr-$PR/$GITHUB_RUN_ID"
           mkdir -p .agent-out/publish && cp "${files[@]}" .agent-out/publish/
-          "$BIN/publish-pages.sh" .agent-out/publish "$dir" "qa: screenshots for PR #$PR"
+          "$BIN/agent.sh" publish-pages .agent-out/publish "$dir" "qa: screenshots for PR #$PR"
           base="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/gh-pages/$dir"
           {
             echo "<!-- agent:qa-screenshots -->"
@@ -450,16 +450,16 @@ jobs:
           URL: ${{ steps.preview.outputs.url || steps.guard.outputs.url }}
         run: |
           if [ "$CI_RESULT" = "fail" ]; then
-            stale=$("$BIN/pr-still-current.sh" "$PR" "$HEAD_SHA" agent:qa)
+            stale=$("$BIN/agent.sh" pr-still-current "$PR" "$HEAD_SHA" agent:qa)
             if [ -n "$stale" ]; then echo "CI failed, but ${stale#skip=}" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; fi
-            "$BIN/transition.sh" "$PR" agent:changes-requested
+            "$BIN/agent.sh" transition "$PR" agent:changes-requested
             gh pr comment "$PR" --body "<!-- agent:merge -->
           ❌ Required checks failed on \`${HEAD_SHA:0:7}\`: $CI_FAILED. QA was skipped, since this commit can't merge. Implementor: open the failing check, reproduce it locally, fix it, and run all checks again before pushing."
-            "$BIN/progress.sh" --pr "$PR" "🧪 **QA**: skipped, required checks failed on #$PR, back to the Implementor"
+            "$BIN/agent.sh" progress --pr "$PR" "🧪 **QA**: skipped, required checks failed on #$PR, back to the Implementor"
             exit 0
           fi
           if [ "$READY" != "true" ]; then
-            "$BIN/transition.sh" "$PR" agent:needs-decision
+            "$BIN/agent.sh" transition "$PR" agent:needs-decision
             if [ "$LOCAL" = true ]; then
               gh pr comment "$PR" --body "⚠️ QA could not start: the app never answered at $URL on the runner (\`AGENT_QA_START_COMMAND\`, see the [run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Handing to the Lead."
             else
@@ -468,23 +468,23 @@ jobs:
             exit 0
           fi
           verdict=$(echo "${OUT:-null}" | jq -r '.verdict // "error"')
-          if [ "$("$BIN/count-comments.sh" "$PR" qa)" -le "${{ steps.guard.outputs.total }}" ]; then
+          if [ "$("$BIN/agent.sh" count-comments "$PR" qa)" -le "${{ steps.guard.outputs.total }}" ]; then
             echo "::warning::QA returned '$verdict' but posted no report"
             verdict=missing-comment
           fi
           # The PR may have changed while the agent worked (new commits, a conflict flagged by the merge
           # gate, a Lead decision). Never apply a verdict on top of that.
-          stale=$("$BIN/pr-still-current.sh" "$PR" "$HEAD_SHA" agent:qa)
+          stale=$("$BIN/agent.sh" pr-still-current "$PR" "$HEAD_SHA" agent:qa)
           if [ -n "$stale" ]; then
             echo "Verdict '$verdict' not applied: ${stale#skip=}" | tee -a "$GITHUB_STEP_SUMMARY"
-            "$BIN/progress.sh" --pr "$PR" "🧪 **QA** (round ${{ steps.guard.outputs.round }}): verdict not applied, ${stale#skip=}"
+            "$BIN/agent.sh" progress --pr "$PR" "🧪 **QA** (round ${{ steps.guard.outputs.round }}): verdict not applied, ${stale#skip=}"
             exit 0
           fi
           case "$verdict" in
-            pass)        "$BIN/approve.sh" "$PR" "$HEAD_SHA" qa ;;
-            fail)        "$BIN/transition.sh" "$PR" agent:changes-requested ;;
-            needs-human) "$BIN/transition.sh" "$PR" agent:needs-decision ;;
-            *)           "$BIN/transition.sh" "$PR" agent:needs-decision
+            pass)        "$BIN/agent.sh" approve "$PR" "$HEAD_SHA" qa ;;
+            fail)        "$BIN/agent.sh" transition "$PR" agent:changes-requested ;;
+            needs-human) "$BIN/agent.sh" transition "$PR" agent:needs-decision ;;
+            *)           "$BIN/agent.sh" transition "$PR" agent:needs-decision
                          gh pr comment "$PR" --body "⚠️ QA agent failed ([run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Handing to the Lead." ;;
           esac
           case "${{ steps.e2e.outputs.exit }}" in 0) e2e="e2e green" ;; none) e2e="no e2e suite" ;; *) e2e="e2e failing" ;; esac
@@ -493,4 +493,4 @@ jobs:
             fail) msg="found defects · $e2e · details and screenshots on #$PR" ;;
             *)    msg="could not decide, handed to the Lead" ;;
           esac
-          "$BIN/progress.sh" --pr "$PR" "🧪 **QA** (round ${{ steps.guard.outputs.round }}): $msg"
+          "$BIN/agent.sh" progress --pr "$PR" "🧪 **QA** (round ${{ steps.guard.outputs.round }}): $msg"

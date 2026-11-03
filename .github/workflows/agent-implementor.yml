@@ -2,6 +2,10 @@ name: "Agent · Implementor"
 
 # Two jobs:
 #   implement: the issue gets `agent:ready`  -> branch + code + tests + PR
+#              A run that pushed work to its branch without finishing (out of turns, or `progress`)
+#              continues automatically, up to AGENT_MAX_CONTINUATIONS runs (default 3) per design.
+#              A run that reports `waiting` on open issues parks the issue in `agent:blocked` until
+#              they close (agent.sh release-blocked). Everything else goes to the Lead.
 #   fix:       the PR gets `agent:changes-requested` -> address review, push to the same branch
 #
 # Project build/test commands the agent may run come from the repo variable
@@ -18,7 +22,7 @@ on:
 env:
   AGENT_ESCALATION_ASSIGNEE: ${{ vars.AGENT_ESCALATION_ASSIGNEE }}
   AGENT_BOT_ID: ${{ vars.AGENT_BOT_ID }}   # the App's bot user id: unlike its login, it survives renames
-  AGENT_PREVIEW_URL: ${{ vars.AGENT_PREVIEW_URL }}         # link templates (scripts/agents/url.sh)
+  AGENT_PREVIEW_URL: ${{ vars.AGENT_PREVIEW_URL }}         # link templates (scripts/agents/agent.sh url)
   AGENT_PRODUCTION_URL: ${{ vars.AGENT_PRODUCTION_URL }}
 
 jobs:
@@ -67,6 +71,7 @@ jobs:
         run: bash -eo pipefail -c "$SETUP"
 
       - name: Prepare
+        id: prepare
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           BOT: ${{ steps.app.outputs.app-slug }}[bot]
@@ -74,7 +79,9 @@ jobs:
           mkdir -p .agent-out && echo ".agent-out/" >> .git/info/exclude
           git config user.name "$BOT"
           git config user.email "${{ vars.AGENT_BOT_ID }}+$BOT@users.noreply.github.com"
-          scripts/agents/transition.sh "$N" agent:in-progress
+          # Where the branch stood before this run: a run that moved it made progress.
+          echo "head=$(scripts/agents/agent.sh branch-head "$BRANCH")" >> "$GITHUB_OUTPUT"
+          scripts/agents/agent.sh transition "$N" agent:in-progress
 
       - uses: anthropics/claude-code-action@v1
         id: agent
@@ -102,7 +109,7 @@ jobs:
             ${{ vars.AGENT_MODEL && format('--model {0}', vars.AGENT_MODEL) || '' }}
             --allowedTools "Read,Write,Edit,Grep,Glob,Bash(git checkout:*),Bash(git switch:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git add:*),Bash(git mv:*),Bash(git rm:*),Bash(mkdir:*),Bash(git commit:*),Bash(git fetch:*),Bash(git merge:*),Bash(git push:*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh pr create:*),Bash(gh pr view:*)${{ vars.AGENT_BUILD_TOOLS && format(',{0}', vars.AGENT_BUILD_TOOLS) || '' }}"
             --disallowedTools "Bash(git push --force:*),Bash(git push -f:*),Bash(git push origin ${{ github.event.repository.default_branch }}:*)"
-            --json-schema '{"type":"object","properties":{"status":{"type":"string","enum":["pr-opened","blocked"]},"pr_number":{"type":"integer"},"reason":{"type":"string"}},"required":["status"]}'
+            --json-schema '{"type":"object","properties":{"status":{"type":"string","enum":["pr-opened","progress","waiting","blocked"]},"pr_number":{"type":"integer"},"waiting_on":{"type":"array","items":{"type":"integer"}},"reason":{"type":"string"}},"required":["status"]}'
 
       - name: Report denied tools
         if: ${{ !cancelled() && steps.agent.outputs.execution_file != '' }}
@@ -119,8 +126,11 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           OUT: ${{ steps.agent.outputs.structured_output }}
+          BEFORE: ${{ steps.prepare.outputs.head }}
+          MAX_CONTINUATIONS: ${{ vars.AGENT_MAX_CONTINUATIONS || '3' }}
         run: |
           status=$(echo "${OUT:-null}" | jq -r '.status // "error"')
+          reason=$(echo "${OUT:-null}" | jq -r '.reason // "agent did not finish"')
           # The agent can open the PR and then run out of turns before reporting. The open PR is what counts.
           existing=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
           if [ "$status" != "pr-opened" ] && [ -n "$existing" ]; then
@@ -129,7 +139,7 @@ jobs:
             OUT=$(jq -n --argjson pr "$existing" '{status: "pr-opened", pr_number: $pr}')
           fi
           if [ "$status" = "pr-opened" ]; then
-            scripts/agents/transition.sh "$N" agent:pr-open
+            scripts/agents/agent.sh transition "$N" agent:pr-open
             pr=$(echo "${OUT:-null}" | jq -r '.pr_number // empty')
             if [ -n "$pr" ]; then
               # Reviewer, QA and the merge gate ignore drafts (that's how humans pause the agents), so an
@@ -138,15 +148,50 @@ jobs:
                 gh pr ready "$pr"
               fi
               stats=$(gh pr view "$pr" --json additions,deletions,changedFiles --jq '"+\(.additions)/−\(.deletions), \(.changedFiles) files"')
-              url=$(scripts/agents/url.sh preview "$pr")
-              scripts/agents/progress.sh "$N" "🛠 **Implementor**: opened #$pr ($stats)$([ -n "$url" ] && echo " · [preview]($url)" || true)"
+              url=$(scripts/agents/agent.sh url preview "$pr")
+              scripts/agents/agent.sh progress "$N" "🛠 **Implementor**: opened #$pr ($stats)$([ -n "$url" ] && echo " · [preview]($url)" || true)"
             fi
-          else
-            reason=$(echo "${OUT:-null}" | jq -r '.reason // "agent did not finish"')
-            scripts/agents/transition.sh "$N" agent:needs-decision
-            scripts/agents/progress.sh "$N" "🛠 **Implementor**: stopped, handed to the Lead"
-            gh issue comment "$N" --body "⚠️ Implementor stopped: $reason ([run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID))."
+            exit 0
           fi
+
+          # Waiting for other issues: park it until they close, without spending a Lead decision.
+          if [ "$status" = "waiting" ]; then
+            open=$(echo "${OUT:-null}" | jq -r '.waiting_on[]? | select(type == "number")' | sort -un | while read -r d; do
+              [ "$d" = "$N" ] && continue
+              gh api "repos/$GITHUB_REPOSITORY/issues/$d" --jq 'select(.state == "open" and (.pull_request | not)) | .number' 2>/dev/null || true
+            done | paste -sd, -)
+            if [ -n "$open" ]; then
+              gh issue comment "$N" --body "<!-- agent:waits-on $open -->
+          ⏸️ **Waiting for $(echo "$open" | sed -E 's/([0-9]+)/#\1/g; s/,/, /g')**: $reason
+          The Implementor starts again automatically when they are closed." >/dev/null
+              scripts/agents/agent.sh transition "$N" agent:blocked
+              scripts/agents/agent.sh progress "$N" "🛠 **Implementor**: ⏸️ waiting for $(echo "$open" | sed -E 's/([0-9]+)/#\1/g; s/,/, /g')"
+              exit 0
+            fi
+            reason="reported waiting, but none of $(echo "${OUT:-null}" | jq -c '.waiting_on // []') is an open issue. $reason"
+          fi
+
+          # Pushed work but didn't finish (out of turns, or stopped after a step on purpose): continue
+          # from the pushed branch, up to MAX_CONTINUATIONS runs per design. `blocked` means stuck: the Lead.
+          after=$(scripts/agents/agent.sh branch-head "$BRANCH")
+          if [ "$status" != "blocked" ] && [ -n "$after" ] && [ "$after" != "$BEFORE" ]; then
+            used=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/issues/$N/comments" | jq --argjson bot "$AGENT_BOT_ID" '
+              [.[][] | select(.user.id == $bot) | (.body // "")] as $c
+              | ([$c | to_entries[] | select(.value | contains("<!-- agent:architect -->") or contains("<!-- agent:lead -->")) | .key] | max // -1) as $plan
+              | [$c | to_entries[] | select(.key > $plan and (.value | contains("<!-- agent:continue -->")))] | length')
+            if [ "$used" -lt "$MAX_CONTINUATIONS" ]; then
+              gh issue comment "$N" --body "<!-- agent:continue -->
+          🔁 **Implementor pushed progress** to \`$BRANCH\` (\`${after:0:7}\`) without finishing, so it continues from there (continuation $((used + 1)) of $MAX_CONTINUATIONS). Its note: $reason" >/dev/null
+              scripts/agents/agent.sh transition "$N" agent:ready
+              scripts/agents/agent.sh progress "$N" "🛠 **Implementor**: pushed progress (\`${after:0:7}\`), 🔁 continuing ($((used + 1))/$MAX_CONTINUATIONS)"
+              exit 0
+            fi
+            reason="still not finished after $MAX_CONTINUATIONS continuation runs, the work is probably too big for one PR (consider \`split\`). Last note: $reason"
+          fi
+
+          scripts/agents/agent.sh transition "$N" agent:needs-decision
+          scripts/agents/agent.sh progress "$N" "🛠 **Implementor**: stopped, handed to the Lead"
+          gh issue comment "$N" --body "⚠️ Implementor stopped: $reason ([run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID))."
 
   fix:
     # AGENT_PAUSED == 'true' stops every agent job (global pause switch).
@@ -214,7 +259,7 @@ jobs:
           git config user.email "${{ vars.AGENT_BOT_ID }}+$BOT@users.noreply.github.com"
           # agent:fixing shows the Implementor is on it; the conflict sweep leaves such PRs alone, and the
           # watchdog restarts the Implementor if this run dies without a verdict.
-          "$BIN/transition.sh" "$PR" agent:fixing
+          "$BIN/agent.sh" transition "$PR" agent:fixing
 
       - uses: anthropics/claude-code-action@v1
         id: agent
@@ -263,15 +308,15 @@ jobs:
           # On "pushed" the push fires `synchronize` and the Reviewer runs again (after this job: same
           # concurrency group). Only agent:fixing is cleared, never a state someone set meanwhile.
           if [ "$status" = "pushed" ] && gh pr view "$PR" --json labels --jq '.labels[].name' | grep -qx agent:fixing; then
-            "$BIN/transition.sh" "$PR"
+            "$BIN/agent.sh" transition "$PR"
           fi
           if [ "$status" = "pushed" ]; then
-            "$BIN/progress.sh" --pr "$PR" "🛠 **Implementor**: pushed fixes to #$PR"
+            "$BIN/agent.sh" progress --pr "$PR" "🛠 **Implementor**: pushed fixes to #$PR"
           else
-            "$BIN/progress.sh" --pr "$PR" "🛠 **Implementor**: could not fix #$PR ($status), handed to the Lead"
+            "$BIN/agent.sh" progress --pr "$PR" "🛠 **Implementor**: could not fix #$PR ($status), handed to the Lead"
           fi
           if [ "$status" != "pushed" ]; then
             reason=$(echo "${OUT:-null}" | jq -r '.reason // "agent did not finish"')
-            "$BIN/transition.sh" "$PR" agent:needs-decision
+            "$BIN/agent.sh" transition "$PR" agent:needs-decision
             gh pr comment "$PR" --body "⚠️ Implementor ($status): $reason ([run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID))."
           fi

@@ -3,7 +3,7 @@ name: "Agent · Merge"
 # Merge gate: admits approved PRs to the merge queue. When a PR gets `agent:approved` (from the
 # Reviewer, QA or the Lead, or a human):
 #   1. Kill switch: does nothing unless AGENT_AUTO_MERGE == 'true'
-#   2. Approval: an agent approval must name the PR's head commit (approve.sh), else back to review.
+#   2. Approval: an agent approval must name the PR's head commit (agent.sh approve), else back to review.
 #      A human applying the label approves the head as it is
 #   3. Risk: if the linked issue is `risk:high`, a human merges (unless AGENT_AUTO_MERGE_HIGH_RISK == 'true').
 #      So does any PR touching AGENT_PROTECTED_PATHS (default .github/, scripts/, templates/)
@@ -72,15 +72,15 @@ jobs:
             echo "stop=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # An agent approval names the exact commit it approved (scripts/agents/approve.sh). Anything
+          # An agent approval names the exact commit it approved (scripts/agents/agent.sh approve). Anything
           # pushed after it, by anyone, goes through review again. A human applying the label is trusted.
           if [ "$SENDER_TYPE" = "Bot" ]; then
-            approved=$("$BIN/approved-sha.sh" "$PR")
+            approved=$("$BIN/agent.sh" approved-sha "$PR")
             if [ "$approved" != "$HEAD_SHA" ]; then
               echo "Approval was for ${approved:-nothing}, head is $HEAD_SHA" >> "$GITHUB_STEP_SUMMARY"
-              "$BIN/transition.sh" "$PR" agent:review
+              "$BIN/agent.sh" transition "$PR" agent:review
               gh pr comment "$PR" -R "$GITHUB_REPOSITORY" --body "🔁 $([ -n "$approved" ] && echo "The agents approved \`${approved:0:7}\`, but the PR head is now \`${HEAD_SHA:0:7}\`" || echo "No recorded agent approval for \`${HEAD_SHA:0:7}\`"). Sending it through review again."
-              "$BIN/progress.sh" --pr "$PR" "🚦 **Merge gate**: head moved after approval, back to review"
+              "$BIN/agent.sh" progress --pr "$PR" "🚦 **Merge gate**: head moved after approval, back to review"
               echo "stop=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -95,7 +95,7 @@ jobs:
           echo "issue=$issue" >> "$GITHUB_OUTPUT"
           echo "Linked issue: ${issue:-none}, risk: $risk" >> "$GITHUB_STEP_SUMMARY"
           if [ "$risk" = "high" ] && [ "$HIGH_RISK_OK" != "true" ]; then
-            "$BIN/transition.sh" "$PR" agent:needs-human
+            "$BIN/agent.sh" transition "$PR" agent:needs-human
             gh pr comment "$PR" -R "$GITHUB_REPOSITORY" --body "✋ Approved by the agents, but the change is **high risk**, so a human merges it."
             echo "stop=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -104,7 +104,7 @@ jobs:
           # The App's missing Workflows permission only protects .github/workflows/.
           touched=$(gh pr diff "$PR" -R "$GITHUB_REPOSITORY" --name-only | grep -E "^(${PROTECTED//,/|})" || true)
           if [ -n "$touched" ]; then
-            "$BIN/transition.sh" "$PR" agent:needs-human
+            "$BIN/agent.sh" transition "$PR" agent:needs-human
             gh pr comment "$PR" -R "$GITHUB_REPOSITORY" --body "✋ Approved by the agents, but it changes the agent team's own tooling, so a human merges it:
           $(echo "$touched" | sed 's/^/- `/; s/$/`/')"
             echo "stop=true" >> "$GITHUB_OUTPUT"
@@ -124,16 +124,16 @@ jobs:
             | jq -r --argjson bot "$AGENT_BOT_ID" '[.[][] | select(.user.id == $bot) | .body
                 | capture("<!-- agent:integrator-hold (?<s>[0-9a-f]{40}) -->").s] | last // empty')
           if [ "$hold" = "$HEAD_SHA" ]; then
-            "$BIN/transition.sh" "$PR" agent:integrating
-            "$BIN/progress.sh" --pr "$PR" "🚦 **Merge gate**: QA passed on the updated #$PR, back to the Integrator"
+            "$BIN/agent.sh" transition "$PR" agent:integrating
+            "$BIN/agent.sh" progress --pr "$PR" "🚦 **Merge gate**: QA passed on the updated #$PR, back to the Integrator"
             echo "QA passed on the commit the Integrator is holding for: back to the Integrator" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          ahead=$("$BIN/queue.sh" | awk -v n="$PR" '$1 != n' | wc -l | tr -d ' ')
-          # The admission comment fixes the PR's place in the queue (queue.sh orders by it). A human
-          # approval also records the commit it approved, like approve.sh does for the agents.
+          ahead=$("$BIN/agent.sh" queue | awk -v n="$PR" '$1 != n' | wc -l | tr -d ' ')
+          # The admission comment fixes the PR's place in the queue (agent.sh queue orders by it). A human
+          # approval also records the commit it approved, like agent.sh approve does for the agents.
           gh pr comment "$PR" -R "$GITHUB_REPOSITORY" --body "<!-- agent:queued -->
           🚦 **Queued for merge** at position $((ahead + 1))$([ "$ahead" -gt 0 ] && echo " ($ahead PR(s) ahead)"). The Integrator merges queued PRs one at a time: right before merging, it brings this PR up to date with \`$BASE\` and waits for the required checks on exactly that commit, so CI tests what lands. This PR's own changes are not reviewed again unless they change.$([ "$SENDER_TYPE" != "Bot" ] && printf '\n\n<!-- agent:approved-sha %s -->' "$HEAD_SHA")"
-          "$BIN/transition.sh" "$PR" agent:queued
-          "$BIN/progress.sh" --pr "$PR" "🚦 **Merge gate**: #$PR queued for merge (position $((ahead + 1)))"
+          "$BIN/agent.sh" transition "$PR" agent:queued
+          "$BIN/agent.sh" progress --pr "$PR" "🚦 **Merge gate**: #$PR queued for merge (position $((ahead + 1)))"
           echo "Queued at position $((ahead + 1))" >> "$GITHUB_STEP_SUMMARY"
