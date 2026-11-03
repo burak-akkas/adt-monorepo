@@ -60,6 +60,9 @@ const summary = (id: string, name: string) => ({ id, name, createdAt: AT, update
 let details: Record<string, Json>;
 let calls: string[];
 let failing: Set<string>;
+// Calls that answer with a given error, and calls that wait until their gate is opened.
+let errors: Map<string, ApiError>;
+let gates: Map<string, Promise<void>>;
 
 function titles(board: Board, listId = "l1") {
   return (board.columns[listId] ?? []).map((c) => c.title);
@@ -71,11 +74,18 @@ beforeEach(() => {
   details = { b1: detailJson("b1", "First"), b2: detailJson("b2", "Second", []) };
   calls = [];
   failing = new Set();
+  errors = new Map();
+  gates = new Map();
   postImport.mockReset();
   request.mockReset();
   request.mockImplementation((async (path: string, options: { method?: string; body?: unknown } = {}) => {
     const call = `${options.method ?? "GET"} ${path}`;
     calls.push(call);
+    await gates.get(call);
+    const error = errors.get(call);
+    if (error) {
+      throw error;
+    }
     if (failing.has(call)) {
       throw new ApiError("server", 500, "Boom");
     }
@@ -86,6 +96,9 @@ beforeEach(() => {
       case "GET /boards/b1":
       case "GET /boards/b2":
       case "GET /boards/b3":
+        if (!details[path.split("/")[2]]) {
+          throw new ApiError("not-found", 404, "Not found");
+        }
         return structuredClone(details[path.split("/")[2]]);
       case "POST /lists/l1/cards": {
         const list = (details.b1.lists as Json[])[0];
@@ -229,6 +242,126 @@ describe("server mode: update", () => {
     act(() => result.current.board[1]((b) => undoArchive(b, archived, { listId: "l1" })));
     expect(titles(result.current.board[0])).toEqual(["Card c1"]);
     await waitFor(() => expect(calls).toEqual(["POST /cards/c1/archive", "POST /archive/c1/restore"]));
+  });
+});
+
+function gate(call: string) {
+  let open!: () => void;
+  gates.set(call, new Promise<void>((resolve) => (open = resolve)));
+  return () => {
+    gates.delete(call);
+    open();
+  };
+}
+
+const focus = () => act(() => void window.dispatchEvent(new Event("focus")));
+
+function serverRenames(title: string) {
+  ((details.b1.lists as Json[])[0].cards as Json[])[0].title = title;
+}
+
+describe("server mode: catching up with the server", () => {
+  it("shows the server's board when the window gets focus", async () => {
+    const { result } = await ready();
+    serverRenames("Changed in tab A");
+    details.b2.name = "Renamed in tab A";
+    focus();
+    await waitFor(() => expect(titles(result.current.board[0])).toEqual(["Changed in tab A"]));
+    expect(result.current.boards.boards.map((b) => b.name)).toEqual(["First", "Renamed in tab A"]);
+  });
+
+  it("catches up when the tab becomes visible, but not when it becomes hidden", async () => {
+    const { result } = await ready();
+    serverRenames("Changed in tab A");
+    const visibility = vi.spyOn(document, "visibilityState", "get");
+    try {
+      calls.length = 0;
+      visibility.mockReturnValue("hidden");
+      act(() => void document.dispatchEvent(new Event("visibilitychange")));
+      await Promise.resolve();
+      expect(calls).toEqual([]);
+
+      visibility.mockReturnValue("visible");
+      act(() => void document.dispatchEvent(new Event("visibilitychange")));
+      await waitFor(() => expect(titles(result.current.board[0])).toEqual(["Changed in tab A"]));
+    } finally {
+      visibility.mockRestore();
+    }
+  });
+
+  it("waits for a save in flight and does not put an older board over it", async () => {
+    const { result } = await ready();
+    const open = gate("PATCH /cards/c1");
+    act(() => result.current.board[1]((b) => renameCard(b, "c1", "Mine")));
+    calls.length = 0;
+    focus();
+    await Promise.resolve();
+    expect(calls).not.toContain("GET /boards/b1");
+    serverRenames("Mine");
+    open();
+    await waitFor(() => expect(calls).toContain("GET /boards/b1"));
+    await waitFor(() => expect(calls.filter((c) => c === "GET /boards/b1")).toHaveLength(1));
+    expect(titles(result.current.board[0])).toEqual(["Mine"]);
+  });
+
+  it("keeps an edit made while the catch-up is fetching", async () => {
+    const { result } = await ready();
+    const open = gate("GET /boards/b1");
+    focus();
+    await waitFor(() => expect(calls.filter((c) => c === "GET /boards/b1")).toHaveLength(2));
+    act(() => result.current.board[1]((b) => renameCard(b, "c1", "Typed just now")));
+    open();
+    await waitFor(() => expect(calls).toContain("PATCH /cards/c1"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(titles(result.current.board[0])).toEqual(["Typed just now"]);
+  });
+
+  it.each([
+    ["not-found", 404],
+    ["conflict", 409],
+  ] as const)("refetches and says it was changed elsewhere on a %s", async (kind, status) => {
+    const { result } = await ready();
+    errors.set("PATCH /cards/c1", new ApiError(kind, status, "Nope"));
+    serverRenames("Server version");
+    calls.length = 0;
+    act(() => {
+      result.current.board[1]((b) => renameCard(b, "c1", "One"));
+      result.current.board[1]((b) => addCard(b, "Later", { id: "client-2", listId: "l1" }));
+    });
+    await waitFor(() => expect(result.current.save.error).toContain("changed somewhere else"));
+    expect(result.current.save.error).not.toContain("Nope");
+    await waitFor(() => expect(titles(result.current.board[0])).toEqual(["Server version"]));
+    expect(calls).toContain("GET /boards/b1");
+    // The edit queued after the failed one was skipped, so it cannot undo the refetch.
+    expect(calls).not.toContain("POST /lists/l1/cards");
+  });
+
+  it("keeps the generic message for a server error", async () => {
+    const { result } = await ready();
+    failing.add("PATCH /cards/c1");
+    act(() => result.current.board[1]((b) => renameCard(b, "c1", "One")));
+    await waitFor(() => expect(result.current.save.error).toContain("Could not save"));
+    expect(result.current.save.error).not.toContain("changed somewhere else");
+  });
+
+  it("reloads the boards when the shown board is gone", async () => {
+    const { result } = await ready();
+    delete details.b1;
+    focus();
+    await waitFor(() => expect(result.current.boards.currentId).toBe("b2"));
+    expect(result.current.save.error).toContain("changed somewhere else");
+  });
+
+  it("says nothing and keeps the board when the catch-up fails", async () => {
+    const { result } = await ready();
+    failing.add("GET /boards");
+    calls.length = 0;
+    focus();
+    await waitFor(() => expect(calls).toContain("GET /boards"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(result.current.save.error).toBeNull();
+    expect(result.current.boards.ready).toBe(true);
+    expect(titles(result.current.board[0])).toEqual(["Card c1"]);
   });
 });
 

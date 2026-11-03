@@ -3,7 +3,7 @@
 import { boardDetailSchema, boardSummarySchema, DEFAULT_BOARD_NAME, DEFAULT_LIST_NAMES, type BoardDetail, type BoardSummary } from "@adt/contracts";
 import { useSyncExternalStore } from "react";
 import { z } from "zod";
-import { apiRequest, importBoard } from "@/lib/api-client";
+import { ApiError, apiRequest, importBoard } from "@/lib/api-client";
 import type { Board } from "@/lib/board";
 import { detailToBoard, withClientIds } from "@/lib/boardDetail";
 import { diffBoard, runOperations } from "@/lib/boardSync";
@@ -15,6 +15,7 @@ import { toImportRequest } from "@/lib/localImport";
 
 export const CURRENT_BOARD_STORAGE_KEY = "kanban-current-board-v1";
 export const SAVE_ERROR_PREFIX = "Could not save, the board was reset to the saved version.";
+export const CHANGED_ELSEWHERE = "This board was changed somewhere else, so it was updated to the latest version.";
 const RELOAD_ERROR = "Could not load your boards. Reload the page to try again.";
 
 type Status = "loading" | "ready" | "error";
@@ -69,6 +70,14 @@ interface Queue {
 
 const queues = new Map<string, Queue>();
 
+// Bumped by every local edit, so a catch-up fetch can tell the user changed something while it ran.
+let localVersion = 0;
+// A catch-up was asked for while saves were running: it runs when they are done.
+let catchUpWanted = false;
+let catchingUp: Promise<void> | null = null;
+// Board-level calls (create, rename, delete...) that are running.
+let boardCalls = 0;
+
 function queueFor(boardId: string): Queue {
   let queue = queues.get(boardId);
   if (!queue) {
@@ -83,6 +92,9 @@ function messageOf(error: unknown): string {
 }
 
 function saveFailure(error: unknown): string {
+  if (error instanceof ApiError && (error.kind === "not-found" || error.kind === "conflict")) {
+    return CHANGED_ELSEWHERE;
+  }
   return `${SAVE_ERROR_PREFIX} ${messageOf(error)}`;
 }
 
@@ -160,16 +172,17 @@ function start(): Promise<void> {
     return Promise.resolve();
   }
   started = true;
+  window.addEventListener("focus", onFocus);
+  document.addEventListener("visibilitychange", onVisibility);
   return loadAll(readStoredId()).catch((error: unknown) => {
     setState({ status: "error", error: `${RELOAD_ERROR} ${messageOf(error)}` });
   });
 }
 
 // After a failure anywhere: show what the server has, with a message. Never silent.
-async function recover(error: unknown, boardId: string) {
+async function recover(error: unknown, boardId: string, message = saveFailure(error)) {
   const queue = queueFor(boardId);
   queue.generation++;
-  const message = saveFailure(error);
   try {
     const list = await fetchList();
     const id = list.some((b) => b.id === state.currentId) ? state.currentId : (list[0]?.id ?? state.currentId);
@@ -183,6 +196,62 @@ async function recover(error: unknown, boardId: string) {
   } finally {
     // Changes made while the refetch ran were built on a board that is gone.
     queue.generation++;
+  }
+}
+
+function runWantedCatchUp(queue: Queue) {
+  if (catchUpWanted && queue.pending === 0 && boardCalls === 0) {
+    catchUpWanted = false;
+    void catchUp();
+  }
+}
+
+// Shows what the server has now (the board and the list of boards), e.g. when the tab is used again after
+// another tab changed things. It only ever replaces the shown board: local changes are never sent again.
+function catchUp(): Promise<void> {
+  if (state.status !== "ready") {
+    return Promise.resolve();
+  }
+  if (catchingUp) {
+    return catchingUp;
+  }
+  const id = state.currentId;
+  const queue = queueFor(id);
+  if (queue.pending > 0 || boardCalls > 0) {
+    catchUpWanted = true;
+    return Promise.resolve();
+  }
+  const version = localVersion;
+  const run = (async () => {
+    try {
+      const list = await fetchList();
+      const detail = await fetchDetail(id);
+      if (localVersion !== version || queue.pending > 0 || boardCalls > 0 || state.currentId !== id || state.status !== "ready") {
+        // The user changed something meanwhile: that wins, and the next catch-up picks the rest up.
+        return;
+      }
+      state = { ...state, boards: summaries(list) };
+      showDetail(detail);
+    } catch (error) {
+      if (error instanceof ApiError && error.kind === "not-found" && state.currentId === id) {
+        await recover(error, id, CHANGED_ELSEWHERE);
+      }
+      // Anything else (network, server): nothing was lost, the next focus tries again.
+    } finally {
+      catchingUp = null;
+    }
+  })();
+  catchingUp = run;
+  return run;
+}
+
+function onFocus() {
+  void catchUp();
+}
+
+function onVisibility() {
+  if (document.visibilityState === "visible") {
+    void catchUp();
   }
 }
 
@@ -211,6 +280,7 @@ function enqueue(boardId: string, job: () => Promise<void>) {
       await recover(error, boardId);
     } finally {
       queue.pending--;
+      runWantedCatchUp(queue);
     }
   });
 }
@@ -225,6 +295,7 @@ function update(change: (board: Board) => Board) {
   if (next === prev) {
     return;
   }
+  localVersion++;
   setState({ board: next });
   const queue = queueFor(boardId);
   let operations;
@@ -245,12 +316,16 @@ function update(change: (board: Board) => Board) {
 async function boardCall(work: () => Promise<void>) {
   const boardId = state.currentId;
   const queue = queueFor(boardId);
+  boardCalls++;
   const run = queue.chain.then(work);
   queue.chain = run.catch(() => undefined);
   try {
     await run;
   } catch (error) {
     await recover(error, boardId);
+  } finally {
+    boardCalls--;
+    runWantedCatchUp(queue);
   }
 }
 
@@ -292,6 +367,7 @@ function createBoard(name: string): NameResult {
 function renameBoard(id: string, name: string): NameResult {
   const result = validateBoardName(name, state.boards, id);
   if (result.ok) {
+    localVersion++;
     setState({ boards: state.boards.map((b) => (b.id === id ? { ...b, name: result.name } : b)) });
     void boardCall(async () => {
       await apiRequest(`/boards/${encodeURIComponent(id)}`, { method: "PATCH", body: { name: result.name } });
@@ -394,4 +470,10 @@ export function resetServerBoardStore() {
   state = INITIAL;
   started = false;
   queues.clear();
+  localVersion = 0;
+  catchUpWanted = false;
+  catchingUp = null;
+  boardCalls = 0;
+  window.removeEventListener("focus", onFocus);
+  document.removeEventListener("visibilitychange", onVisibility);
 }
