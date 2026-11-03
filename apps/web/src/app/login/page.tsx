@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Suspense } from "react";
 
 import { AuthForm } from "@/components/app/AuthForm";
 
@@ -11,7 +12,9 @@ export default function LoginPage() {
         Back to board
       </Link>
       <h1 className="text-2xl font-semibold tracking-tight">Log in</h1>
-      <AuthForm mode="login" />
+      <Suspense>
+        <AuthForm mode="login" />
+      </Suspense>
     </main>
   );
 }

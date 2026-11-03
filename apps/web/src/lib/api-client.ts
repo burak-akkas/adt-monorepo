@@ -4,6 +4,9 @@ import type { ZodType } from "zod";
 // The browser only talks to its own origin; Next.js forwards /api/... to the API (and adds the internal key).
 export const API_BASE_PATH = "/api";
 
+// Dispatched on `window` when the API answers 401, so the app can treat it as a logout.
+export const UNAUTHORIZED_EVENT = "adt:unauthorized";
+
 export type ApiErrorKind =
   | "unauthorized"
   | "forbidden"
@@ -103,6 +106,9 @@ export async function apiRequest<T = undefined>(path: string, options: ApiReques
     throw new ApiError("network", 0, GENERIC_MESSAGES.network);
   }
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
     const kind = kindForStatus(response.status);
     throw new ApiError(kind, response.status, await errorMessage(response, kind));
   }
