@@ -431,11 +431,8 @@ def integrating_one_pr():
     compare(make_state({101: {"head": sha(0xa1), "merge_fails": 1, "comments": [approval(sha(0xa1)), queued()]}}), "integrate", [101])
     compare(make_state({101: {"head": sha(0xa1), "labels": ["agent:review"]}}), "integrate", [101])
     compare(make_state({101: {"head": sha(0xa1), "draft": True, "comments": [approval(sha(0xa1)), queued()]}}), "integrate", [101])
-    compare(make_state({101: {"head": sha(0xa1), "files": files("+x", name=".github/workflows/x.yml"), "comments": [approval(sha(0xa1)), queued()]}}),
-            "integrate", [101])
-    st = make_state({101: {"head": sha(0xa1), "issue": 11, "comments": [approval(sha(0xa1)), queued()]}})
-    st["items"]["11"]["labels"].append("risk:high")
-    compare(st, "integrate", [101])
+    # Changed since: a high-risk PR, or one touching protected paths, is no longer sent to a human on
+    # arrival. The queue tests it and then hands it over (tests/test_integrator.py HumanMergesTest).
     compare(make_state({101: {"head": sha(0xa1), "comments": [approval(sha(0xa1)), queued()]}}, base_version=1, workflow_version=1), "integrate", [101])
 
 
