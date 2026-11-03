@@ -76,7 +76,7 @@ describe("<ShareDialog />", () => {
   });
 
   it("says a generic validation error means the email is invalid", async () => {
-    vi.mocked(inviteMember).mockRejectedValue(new ApiError("validation", 400, "The data was rejected."));
+    vi.mocked(inviteMember).mockRejectedValue(new ApiError("validation", 400, "Validation failed"));
     const { user } = setup();
     await screen.findByText("one@example.test");
     await user.type(emailField(), "nope");

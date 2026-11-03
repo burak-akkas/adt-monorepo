@@ -10,7 +10,9 @@ export const NO_EMAIL_NOTICE = "No email is sent. Tell the person yourself that 
 function inviteMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.kind === "validation") {
-      return error.message === "The data was rejected." ? "Enter a valid email address." : error.message;
+      // The API answers "Validation failed" for a malformed body; the client's own fallback is "The data was rejected.".
+      const generic = error.message === "The data was rejected." || error.message === "Validation failed";
+      return generic ? "Enter a valid email address." : error.message;
     }
     if (error.kind === "conflict") {
       return "This person already has access.";
