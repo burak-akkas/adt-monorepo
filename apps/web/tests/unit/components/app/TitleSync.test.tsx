@@ -6,7 +6,7 @@ import { BoardSwitcher } from "@/components/app/BoardSwitcher";
 import { TitleSync } from "@/components/app/TitleSync";
 import { addCard, archiveDone, moveCard, restoreCard } from "@/lib/board";
 import { createBoardEntry, initialBoardList } from "@/lib/boards";
-import { saveBoards } from "@/lib/storage";
+import { saveBoards } from "../../../support/testStorage";
 import { resetBoardStore, useBoard, useBoards } from "@/hooks/useBoard";
 
 // Exposes the store's updaters so tests can change the board like the real UI does.

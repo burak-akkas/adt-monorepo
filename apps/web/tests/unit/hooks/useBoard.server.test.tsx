@@ -4,7 +4,7 @@ import { ApiError } from "@/lib/api-client";
 import { addCard, archiveCard, renameCard, undoArchive, type Board } from "@/lib/board";
 import { resetBoardStore, useBoard, useBoards, useSaveError } from "@/hooks/useBoard";
 
-vi.mock("@/lib/config", () => ({ USE_SERVER_BOARDS: true }));
+vi.unmock("@/hooks/serverBoardStore");
 vi.mock("@/lib/api-client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api-client")>()),
   apiRequest: vi.fn(),
@@ -95,6 +95,8 @@ beforeEach(() => {
       case "POST /boards":
         details.b3 = detailJson("b3", (body as { name: string }).name, []);
         return summary("b3", (body as { name: string }).name);
+      case "POST /boards/b3/lists":
+        return { id: `new-${calls.length}` };
       case "POST /boards/b1/duplicate":
         details.b3 = detailJson("b3", "First (copy)");
         return summary("b3", "First (copy)");
@@ -151,15 +153,16 @@ describe("server mode: update", () => {
     await waitFor(() => expect(calls).toContain("POST /lists/l1/cards"));
   });
 
-  it("refetches once after creates, then uses the server id", async () => {
+  it("refetches once after creates, keeps the client id on screen and sends the server id", async () => {
     const { result } = await ready();
     calls.length = 0;
     act(() => result.current.board[1]((b) => addCard(b, "New", { id: "client-1", listId: "l1" })));
     await waitFor(() => expect(calls).toEqual(["POST /lists/l1/cards", "GET /boards/b1"]));
-    await waitFor(() => expect(result.current.board[0].columns.l1.map((c) => c.id)).toEqual(["c1", "srv1"]));
+    // The card keeps the id it was made with, so a card dialog that is open stays open.
+    await waitFor(() => expect(result.current.board[0].columns.l1.map((c) => c.id)).toEqual(["c1", "client-1"]));
 
     calls.length = 0;
-    act(() => result.current.board[1]((b) => renameCard(b, "srv1", "Renamed")));
+    act(() => result.current.board[1]((b) => renameCard(b, "client-1", "Renamed")));
     await waitFor(() => expect(calls).toEqual(["PATCH /cards/srv1"]));
   });
 
@@ -239,7 +242,24 @@ describe("server mode: boards", () => {
     expect(outcome).toEqual({ ok: true, name: "Third" });
     await waitFor(() => expect(result.current.boards.currentId).toBe("b3"));
     expect(calls).toContain("POST /boards");
+    // The API makes an empty board: the three default lists are added to it.
+    expect(calls.filter((c) => c === "POST /boards/b3/lists")).toHaveLength(3);
     expect(result.current.boards.boards.map((b) => b.name)).toContain("Third");
+  });
+
+  it("stores the Doing / Done lists found by name the first time a board is read", async () => {
+    const detail = detailJson("b1", "First");
+    detail.lists = [
+      { id: "l1", boardId: "b1", name: "To do", position: 0, wipLimit: null, collapsed: false, cards: [] },
+      { id: "l2", boardId: "b1", name: "Doing", position: 1, wipLimit: null, collapsed: false, cards: [] },
+      { id: "l3", boardId: "b1", name: "Done", position: 2, wipLimit: null, collapsed: false, cards: [] },
+    ];
+    detail.settings = { background: null, view: "board", collapsedListIds: [], doingListId: null, doneListId: null };
+    details = { b1: detail };
+    const { result } = await ready();
+    expect(calls).toContain("PATCH /boards/b1/settings");
+    expect(request).toHaveBeenCalledWith("/boards/b1/settings", { method: "PATCH", body: { doingListId: "l2", doneListId: "l3" } });
+    expect(result.current.board[0].insightsLists).toEqual({ doing: "l2", done: "l3" });
   });
 
   it("refuses an invalid name without calling the API", async () => {
@@ -267,6 +287,14 @@ describe("server mode: boards", () => {
     expect(calls).toContain("GET /boards/b2");
     expect(localStorage.getItem("kanban-current-board-v1")).toBe("b2");
     expect(titles(result.current.board[0])).toEqual([]);
+  });
+
+  it("is not ready while another board loads", async () => {
+    const { result } = await ready();
+    act(() => result.current.boards.selectBoard("b2"));
+    expect(result.current.boards.ready).toBe(false);
+    await waitFor(() => expect(result.current.boards.ready).toBe(true));
+    expect(result.current.boards.currentId).toBe("b2");
   });
 
   it("duplicates the current board and selects the copy", async () => {

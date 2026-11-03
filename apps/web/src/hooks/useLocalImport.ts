@@ -16,6 +16,7 @@ interface Options {
 // Moves the boards saved in this browser to the signed-in account. Runs once on mount; `retry` runs again on what is left.
 export function useLocalImport({ email, enabled = true }: Options) {
   const [state, setState] = useState<LocalImportState>({ phase: "idle" });
+  const [settled, setSettled] = useState(false);
   const started = useRef(false);
   const mounted = useRef(true);
   // Totals of earlier runs: a retry only sees the remaining boards, but the message counts them all.
@@ -34,6 +35,7 @@ export function useLocalImport({ email, enabled = true }: Options) {
     if (!mounted.current) {
       return;
     }
+    setSettled(true);
     if (result.status === "nothing") {
       setState({ phase: "idle" });
       return;
@@ -46,18 +48,21 @@ export function useLocalImport({ email, enabled = true }: Options) {
   }, [email]);
 
   useEffect(() => {
-    if (!enabled || started.current || !hasLocalBoards()) {
+    if (!enabled || started.current) {
       return;
     }
     started.current = true;
+    if (!hasLocalBoards()) {
+      setSettled(true);
+      return;
+    }
     void run();
   }, [enabled, run]);
 
-  const retry = useCallback(() => {
-    void run();
-  }, [run]);
+  const retry = useCallback(() => run(), [run]);
 
   const dismiss = useCallback(() => setState({ phase: "idle" }), []);
 
-  return { state, retry, dismiss };
+  // `settled`: the first import has finished (or there was nothing to import).
+  return { state, settled, retry, dismiss };
 }

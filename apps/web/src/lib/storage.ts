@@ -29,6 +29,7 @@ import {
 } from "./board";
 import { MAX_TEMPLATES, validateTemplateName } from "./templates";
 
+// Boards saved in this browser by earlier versions: only read, to import them into the account.
 export const STORAGE_KEY = "kanban-boards-v2";
 // Only read, to migrate old data; never written or removed.
 export const LEGACY_STORAGE_KEY = "kanban-board-v1";
@@ -419,12 +420,4 @@ export function loadBoards(storage: Storage | undefined = globalThis.localStorag
     // fall through to an empty list
   }
   return initialBoardList();
-}
-
-export function saveBoards(list: BoardList, storage: Storage | undefined = globalThis.localStorage): void {
-  try {
-    storage?.setItem(STORAGE_KEY, JSON.stringify(list));
-  } catch {
-    // Storage full or blocked (e.g. private mode): keep working in memory.
-  }
 }

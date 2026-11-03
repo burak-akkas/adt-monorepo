@@ -1,26 +1,24 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   replace: vi.fn(),
   status: "loading" as "loading" | "anonymous" | "authenticated",
-  enabled: true,
+  getSession: vi.fn(),
+  notify: vi.fn(),
 }));
+vi.mock("@/lib/auth-client", () => ({ authClient: { getSession: mocks.getSession, $store: { notify: mocks.notify } } }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: mocks.replace }), usePathname: () => "/" }));
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ status: mocks.status, user: null, logout: vi.fn() }) }));
-vi.mock("@/lib/config", () => ({
-  get USE_SERVER_BOARDS() {
-    return mocks.enabled;
-  },
-}));
 
 import { AuthGate } from "@/components/app/AuthGate";
 import { UNAUTHORIZED_EVENT } from "@/lib/api-client";
 
 beforeEach(() => {
   mocks.replace.mockReset();
+  mocks.getSession.mockReset();
+  mocks.notify.mockReset();
   mocks.status = "loading";
-  mocks.enabled = true;
   window.history.replaceState(null, "", "/");
 });
 
@@ -37,12 +35,28 @@ describe("AuthGate", () => {
     expect(mocks.replace).not.toHaveBeenCalled();
   });
 
-  it("redirects an anonymous visitor to login with next", () => {
+  it("redirects an anonymous visitor to login with next", async () => {
     mocks.status = "anonymous";
+    mocks.getSession.mockResolvedValue({ data: null });
     window.history.replaceState(null, "", "/?board=x");
     render(gate());
     expect(screen.queryByText("board")).not.toBeInTheDocument();
-    expect(mocks.replace).toHaveBeenCalledWith("/login?next=%2F%3Fboard%3Dx");
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/login?next=%2F%3Fboard%3Dx"));
+  });
+
+  it("redirects when the session check fails", async () => {
+    mocks.status = "anonymous";
+    mocks.getSession.mockRejectedValue(new Error("offline"));
+    render(gate());
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/login?next=%2F"));
+  });
+
+  it("does not redirect, and refreshes the session, when the server says the user is signed in", async () => {
+    mocks.status = "anonymous";
+    mocks.getSession.mockResolvedValue({ data: { user: { id: "u" } } });
+    render(gate());
+    await waitFor(() => expect(mocks.notify).toHaveBeenCalledWith("$sessionSignal"));
+    expect(mocks.replace).not.toHaveBeenCalled();
   });
 
   it("renders the children when authenticated", () => {
@@ -59,16 +73,5 @@ describe("AuthGate", () => {
       window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
     });
     expect(mocks.replace).toHaveBeenCalledWith("/login?next=%2F");
-  });
-
-  it("does nothing when server boards are off", () => {
-    mocks.enabled = false;
-    mocks.status = "anonymous";
-    render(gate());
-    act(() => {
-      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
-    });
-    expect(screen.getByText("board")).toBeInTheDocument();
-    expect(mocks.replace).not.toHaveBeenCalled();
   });
 });

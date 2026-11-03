@@ -13,7 +13,8 @@ import {
   toImportRequest,
   type LockManagerLike,
 } from "@/lib/localImport";
-import { LEGACY_STORAGE_KEY, saveBoards, STORAGE_KEY } from "@/lib/storage";
+import { LEGACY_STORAGE_KEY, STORAGE_KEY } from "@/lib/storage";
+import { saveBoards } from "../../support/testStorage";
 
 const AT = "2026-01-02T03:04:05.000Z";
 const LATER = "2026-02-02T03:04:05.000Z";

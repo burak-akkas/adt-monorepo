@@ -92,7 +92,8 @@ test("export then import keeps the collapsed list", async ({ page }, testInfo) =
   await page.getByRole("button", { name: "Expand Done" }).click();
   await page.getByRole("button", { name: "Settings" }).click();
   await settings.getByLabel("Import board file").setInputFiles(path);
-  await settings.getByRole("button", { name: "Replace" }).click();
+  // The import adds the file as a new board and opens it.
+  await settings.getByRole("button", { name: "Add", exact: true }).click();
   await settings.getByRole("button", { name: "Close" }).click();
   await expect(page.getByRole("button", { name: "Expand Done" })).toBeVisible();
 });

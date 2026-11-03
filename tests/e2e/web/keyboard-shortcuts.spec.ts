@@ -3,6 +3,8 @@ import { expect, test } from "../../support/fixtures";
 test.beforeEach(async ({ page }) => {
   await page.goto("./");
   await expect(page.getByRole("heading", { level: 1, name: "Kanban" })).toBeVisible();
+  // The board shows once the account's boards have loaded.
+  await expect(page.getByLabel("New card title")).toBeVisible();
 });
 
 test("n focuses the add-card input and / focuses search", async ({ page }) => {

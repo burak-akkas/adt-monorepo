@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { addCard, emptyBoard } from "@/lib/board";
-import { loadBoards, parseBoard, saveBoards, serializeBoard } from "@/lib/storage";
+import { loadBoards, parseBoard, serializeBoard } from "@/lib/storage";
+import { saveBoards } from "../../support/testStorage";
 import { boardTemplates, saveAsTemplate } from "@/lib/templates";
 import { initialBoardList } from "@/lib/boards";
 

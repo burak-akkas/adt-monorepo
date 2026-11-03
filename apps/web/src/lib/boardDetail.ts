@@ -58,6 +58,30 @@ function toTemplate(template: BoardDetail["templates"][number]): CardTemplate {
   };
 }
 
+// Puts the ids the client made up back on cards, checklist items and comments (`ids`: client id -> server id), so a card
+// dialog that is open keeps working when the server's copy of the board replaces the shown one.
+export function withClientIds(board: Board, ids: Map<string, string>): Board {
+  if (ids.size === 0) {
+    return board;
+  }
+  const back = new Map<string, string>();
+  for (const [client, server] of ids) {
+    back.set(server, client);
+  }
+  const own = (id: string) => back.get(id) ?? id;
+  const card = (c: Card): Card => ({
+    ...c,
+    id: own(c.id),
+    ...(c.checklist && { checklist: c.checklist.map((item) => ({ ...item, id: own(item.id) })) }),
+    ...(c.comments && { comments: c.comments.map((comment) => ({ ...comment, id: own(comment.id) })) }),
+  });
+  return {
+    ...board,
+    columns: Object.fromEntries(Object.entries(board.columns).map(([listId, cards]) => [listId, cards.map(card)])),
+    archive: board.archive.map(card),
+  };
+}
+
 // The server's board as the `Board` the UI and the pure board functions work with.
 export function detailToBoard(detail: BoardDetail): Board {
   const lists = [...detail.lists].sort((a, b) => a.position - b.position);

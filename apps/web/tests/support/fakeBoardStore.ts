@@ -15,11 +15,13 @@ import {
   type BoardList,
   type NameResult,
 } from "@/lib/boards";
-import { loadBoards, saveBoards, STORAGE_KEY } from "@/lib/storage";
+import { loadBoards, STORAGE_KEY } from "@/lib/storage";
+import { saveBoards } from "./testStorage";
 
-// A tiny external store backed by localStorage. useSyncExternalStore renders the
-// empty server snapshot during the static export, then switches to the stored
-// boards on the client without a hydration mismatch.
+// Test double for hooks/serverBoardStore: the same hooks over boards kept in localStorage,
+// so component tests can seed a board with saveBoard() and need no API. Installed in vitest.setup.ts.
+
+const NO_SAVE_ERROR = { error: null, dismiss: () => {} };
 
 const SERVER_LIST = initialBoardList("server");
 const listeners = new Set<() => void>();
@@ -64,7 +66,7 @@ function commit(next: BoardList) {
   notify();
 }
 
-export function useLocalBoard() {
+export function useServerBoard() {
   const list = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   const update = useCallback((change: (board: Board) => Board) => {
     commit(updateCurrentBoard(getSnapshot(), change));
@@ -72,7 +74,7 @@ export function useLocalBoard() {
   return [currentEntry(list).board, update] as const;
 }
 
-export function useLocalBoards() {
+export function useServerBoards() {
   const list = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   const boards = useMemo(() => list.boards.map(({ id, name }) => ({ id, name })), [list.boards]);
   const createBoard = useCallback((name: string): NameResult => {
@@ -97,10 +99,19 @@ export function useLocalBoards() {
   }, []);
   const deleteBoard = useCallback((id: string) => commit(deleteBoardEntry(getSnapshot(), id)), []);
   const selectBoard = useCallback((id: string) => commit(selectBoardEntry(getSnapshot(), id)), []);
-  return { boards, currentId: list.currentId, createBoard, renameBoard, duplicateBoard, deleteBoard, selectBoard };
+  return { boards, currentId: list.currentId, ready: true, createBoard, renameBoard, duplicateBoard, deleteBoard, selectBoard };
 }
 
-// Tests only: forget the cached boards so the next read comes from storage.
-export function resetLocalBoardStore() {
+export function useServerSaveError() {
+  return NO_SAVE_ERROR;
+}
+
+export async function refreshBoards() {
+  cache = null;
+  notify();
+}
+
+// Forget the cached boards so the next read comes from storage.
+export function resetServerBoardStore() {
   cache = null;
 }

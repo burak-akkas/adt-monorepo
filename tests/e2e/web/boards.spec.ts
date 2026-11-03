@@ -36,7 +36,10 @@ test("creates, switches, renames and deletes boards, remembering the last used o
 
   await chooseAction(page, "Rename board");
   await page.getByLabel("Board name").fill("Projects");
+  // The rename is saved in the background: let it finish before the page goes away.
+  const saved = page.waitForResponse((r) => r.request().method() === "PATCH" && /\/api\/boards\/[^/]+$/.test(new URL(r.url()).pathname));
   await page.getByRole("button", { name: "Rename", exact: true }).click();
+  await saved;
 
   await page.reload();
   await expect(page.getByRole("combobox", { name: "Board" }).locator("option:checked")).toHaveText("Projects");
