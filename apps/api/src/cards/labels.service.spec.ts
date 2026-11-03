@@ -25,7 +25,7 @@ describe("LabelsService", () => {
       data: { userId, name: `B${seq++}`, lists: { create: [{ name: "L", position: 0 }] } },
       include: { lists: true },
     });
-    return cards.create(board.lists[0].id, userId, emails[0], { title: "Card", priority: "medium" });
+    return cards.create(board.lists[0].id, userId, userId === bob ? bobEmail : aliceEmail, { title: "Card", priority: "medium" });
   };
   const positions = async (cardId: string) =>
     (await prisma.cardLabel.findMany({ where: { cardId }, orderBy: { position: "asc" } })).map((l) => [l.name, l.position]);
@@ -61,10 +61,10 @@ describe("LabelsService", () => {
   it("answers 409 for a case-insensitive duplicate on the same card only", async () => {
     const card = await newCard(alice);
     const other = await newCard(alice);
-    await service.add(card.id, alice, "bug");
-    await expect(service.add(card.id, alice, "Bug")).rejects.toBeInstanceOf(ConflictException);
-    expect((await cards.get(card.id, alice, emails[0])).labels).toEqual(["bug"]);
-    expect((await service.add(other.id, alice, "Bug")).labels).toEqual(["Bug"]);
+    await service.add(card.id, alice, aliceEmail, "bug");
+    await expect(service.add(card.id, alice, aliceEmail, "Bug")).rejects.toBeInstanceOf(ConflictException);
+    expect((await cards.get(card.id, alice, aliceEmail)).labels).toEqual(["bug"]);
+    expect((await service.add(other.id, alice, aliceEmail, "Bug")).labels).toEqual(["Bug"]);
   });
 
   it("removes ignoring case and surrounding spaces, keeping positions dense", async () => {
@@ -83,9 +83,9 @@ describe("LabelsService", () => {
 
   it("gives another user's card a 404 and leaves it unchanged", async () => {
     const card = await newCard(alice);
-    await service.add(card.id, alice, "mine");
-    await expect(service.add(card.id, bob, "x")).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.remove(card.id, bob, "mine")).rejects.toBeInstanceOf(NotFoundException);
-    expect((await cards.get(card.id, alice, emails[0])).labels).toEqual(["mine"]);
+    await service.add(card.id, alice, aliceEmail, "mine");
+    await expect(service.add(card.id, bob, bobEmail, "x")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.remove(card.id, bob, bobEmail, "mine")).rejects.toBeInstanceOf(NotFoundException);
+    expect((await cards.get(card.id, alice, aliceEmail)).labels).toEqual(["mine"]);
   });
 });
