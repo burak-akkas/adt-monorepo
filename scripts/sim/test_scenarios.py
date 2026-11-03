@@ -271,6 +271,30 @@ def merge_gate_ignores_a_late_approval_of_a_merged_pr():
 
 
 @test
+def a_high_risk_pr_reaches_the_human_only_tested():
+    # Found on PR #88: the gate handed an approved high-risk PR to a human at once, with red e2e and no
+    # QA. Now it joins the queue: red checks go to the Implementor, and a green, up-to-date, QA-passed
+    # commit is handed to the human, named, instead of being merged.
+    gate = steps("agent-merge.yml", "merge")
+    env = dict(PR=101, HEAD_SHA=sha(0xa1), SENDER_TYPE="Bot", SENDER="bot", PROTECTED=".github/,scripts/,templates/", BASE="sandbox")
+    for check, want in (("fail", ["agent:changes-requested"]), ("pass", ["agent:needs-human"])):
+        st = make_state({101: {"head": sha(0xa1), "bv": 0, "labels": ["agent:approved"], "issue": 11, "comments": [approval(sha(0xa1))]}},
+                        base_version=1, default_checks=check)
+        st["items"]["11"]["labels"].append("risk:high")
+        st = run(st, shell=gate["Risk gate"]["run"], **env)
+        assert st["_outputs"].get("stop") != "true"
+        st = run(st, shell=gate["Join the merge queue"]["run"], **env)
+        assert labels(st, 101) == ["agent:queued"], labels(st, 101)
+        st = run(st)
+        assert not st.get("merged") and labels(st, 101) == want, (labels(st, 101), bodies(st, 101)[-3:], st["_stderr"][-800:])
+        assert not st.get("violations")
+    head = st["items"]["101"]["head"]
+    assert head != sha(0xa1)   # brought up to date with the base before the handover
+    assert f"<!-- agent:ready-to-merge {head} -->" in bodies(st, 101)[-1] and "**high risk**" in bodies(st, 101)[-1]
+    assert [a["problems"] for a in st["handoff_audit"]] == [[]]
+
+
+@test
 def a_human_merge_right_before_the_merge_is_the_documented_race():
     # GitHub's merge API doesn't check freshness without a branch rule, so a human merging by hand
     # between the Integrator's last check and its merge lands an untested combination. Documented

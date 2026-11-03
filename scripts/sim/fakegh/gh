@@ -95,7 +95,39 @@ def violation(kind, **kw):
     st.setdefault("violations", []).append(dict(kind=kind, **kw))
 
 
+def merge_audit(n, it):
+    """What a merge of the PR's head right now would land: is it up to date, green, approved, taken by the
+    Integrator, and (with audit_qa) tested by QA? Returns the audit and the failed requirements."""
+    h = it["head"]
+    audit = {"pr": int(n), "sha": h,
+             "up_to_date": st["shas"][h]["base_version"] == st["base_version"],
+             "green": check_outcome(h) == "pass",
+             "approved": approved_sha(n) == h,
+             "by_integrator": "agent:integrating" in it.get("labels", []),
+             "draft": it.get("draft", False)}
+    if st.get("audit_qa"):
+        # QA in the queue: the latest QA report (a pass), Lead approval or human approval approved a
+        # commit with exactly the own changes that land now.
+        bodies = [c["body"] for c in st["comments_all"] if c["id"] in it["comments"] and c["user"]["id"] == BOT]
+        last = next((b for b in reversed(bodies) if "<!-- agent:qa -->" in b or (("<!-- agent:lead -->" in b or "<!-- agent:queued -->" in b)
+                                                                               and "<!-- agent:approved-sha " in b)), "")
+        m = re.findall(r"<!-- agent:approved-sha ([0-9a-f]{40}) -->", last)
+        audit["qa_tested"] = bool(m) and ("<!-- agent:qa -->" not in last or "Verdict:** pass" in last) \
+            and st["shas"].get(m[-1], {}).get("files") == st["shas"][h]["files"]
+    required = ("up_to_date", "green", "approved") + (() if st.get("legacy") else ("by_integrator",)) \
+        + (("qa_tested",) if st.get("audit_qa") else ())
+    return audit, [k for k in required if not audit[k]] + (["draft"] if audit["draft"] else [])
+
+
 def add_comment(n, body, user=BOT):
+    m = re.search(r"<!-- agent:ready-to-merge ([0-9a-f]{40}) -->", body)
+    if m and user == BOT:   # the Integrator hands a PR to a human to merge: it must be as good as one it would merge itself
+        it = item(n)
+        audit, bad = merge_audit(n, it)
+        bad += [] if m.group(1) == it["head"] else ["names_head"]
+        st.setdefault("handoff_audit", []).append(dict(audit, problems=bad))
+        if bad:
+            violation("unsafe-handoff", pr=int(n), problems=bad)
     c = {"id": len(st["comments_all"]) + 1, "body": body, "user": {"id": user}, "created_at": tick()}
     st["comments_all"].append(c)
     item(n).setdefault("comments", []).append(c["id"])
@@ -325,30 +357,13 @@ if cmd == "pr":
         if it.get("merge_fails", 0) > 0:
             it["merge_fails"] -= 1
             fail("GraphQL: Base branch was modified. Review and try the merge again.")
-        h = it["head"]
-        audit = {"pr": int(n), "sha": h,
-                 "up_to_date": st["shas"][h]["base_version"] == st["base_version"],
-                 "green": check_outcome(h) == "pass",
-                 "approved": approved_sha(n) == h,
-                 "by_integrator": "agent:integrating" in it.get("labels", []),
-                 "draft": it.get("draft", False)}
-        if st.get("audit_qa"):
-            # QA in the queue: the latest QA report (a pass), Lead approval or human approval approved a
-            # commit with exactly the own changes that land now.
-            bodies = [c["body"] for c in st["comments_all"] if c["id"] in it["comments"] and c["user"]["id"] == BOT]
-            last = next((b for b in reversed(bodies) if "<!-- agent:qa -->" in b or (("<!-- agent:lead -->" in b or "<!-- agent:queued -->" in b)
-                                                                                   and "<!-- agent:approved-sha " in b)), "")
-            m = re.findall(r"<!-- agent:approved-sha ([0-9a-f]{40}) -->", last)
-            audit["qa_tested"] = bool(m) and ("<!-- agent:qa -->" not in last or "Verdict:** pass" in last) \
-                and st["shas"].get(m[-1], {}).get("files") == st["shas"][h]["files"]
+        audit, bad = merge_audit(n, it)
         st.setdefault("merge_audit", []).append(audit)
-        required = ("up_to_date", "green", "approved") + (() if st.get("legacy") else ("by_integrator",)) \
-            + (("qa_tested",) if st.get("audit_qa") else ())
-        bad = [k for k in required if not audit[k]] + (["draft"] if audit["draft"] else [])
         if bad:
             # A human merging by hand right after the Integrator's last freshness check: GitHub doesn't
             # stop that without a branch rule. Reported apart from the queue's own mistakes. A human
             # merge the simulated world records at the check's own call count happened after the check.
+            h = it["head"]
             race = bad == ["up_to_date"] and any(c >= st.get("last_fresh_check", {}).get(h, 0) for c in st.get("human_merges", []))
             violation("human-merge-race" if race else "unsafe-merge", pr=int(n), problems=bad)
         it["state"] = "MERGED"

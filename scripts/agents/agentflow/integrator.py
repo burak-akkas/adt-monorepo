@@ -9,14 +9,17 @@ in turn, so only one PR is being merged at any time):
   4. With qa_in_queue: unless QA already passed these own changes, the queue waits while QA tests
      exactly that commit. Nothing else merges meanwhile, so QA runs once per PR, on the code that lands.
   5. If the base moved meanwhile (a human merged something), goes back to 2. Otherwise merges exactly
-     that commit, so what lands is what CI (and QA) tested.
+     that commit, so what lands is what CI (and QA) tested. A high-risk PR, or one that changes the team's
+     own tooling, is handed to a human at this point instead (`agent:needs-human`, naming that commit):
+     a human merges it, but only once the queue has tested it like any other.
 
 Conflicts and red checks go to the Implementor, timeouts and failed merges to the back of the queue.
 Red checks, timeouts and failed merges are failed attempts: after max_attempts since the last Lead
 decision, the Lead decides. Conflicts don't count: they come from other PRs' merges.
 
-The result is one of: merged, bounced (to the Implementor), requeued (back of the queue), left (no
-longer in the queue: closed, draft, new commits, label removed, QA didn't pass), lead.
+The result is one of: merged, handed (to a human, to merge), bounced (to the Implementor), requeued
+(back of the queue), left (no longer in the queue: closed, draft, new commits, label removed, QA didn't
+pass), lead.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ from agentflow.config import Settings
 from agentflow.github import GhError, GitHub
 from agentflow.states import progress, transition
 
-Result = Literal["merged", "bounced", "requeued", "left", "lead"]
+Result = Literal["merged", "handed", "bounced", "requeued", "left", "lead"]
 METHODS = ("squash", "merge", "rebase")
 STOPS_QA = ("agent:changes-requested", "agent:fixing", "agent:needs-decision", "agent:needs-human", "agent:review")
 
@@ -317,7 +320,6 @@ class _Integration:
         pr = self.pr
         head = self.admit()
         self.check_approval(head)
-        self.check_allowed()
         self.required = ",".join(prs.required_checks(self.gh, pr, self.cfg.required))
         qa_applies = self.qa_applies()
         for _ in range(3):  # 2.-5., repeated only if the base moves outside the queue
@@ -334,6 +336,9 @@ class _Integration:
                 continue
             # Still ours right before the merge: another run may have taken it out of the queue meanwhile.
             self.leave_if_changed(head, "right before the merge")
+            why = self.human_merges()
+            if why:
+                self.hand_over(head, why, qa=self.cfg.qa_in_queue and qa_applies)
             if self.merge(head):
                 self.finish("merged")
             # New commits (refused by --match-head-commit) or a closed PR: not a failed attempt.
@@ -362,21 +367,31 @@ class _Integration:
         self.note(f"🚦 **Merge queue**: head of #{pr} moved after approval, back to review")
         self.finish("left")
 
-    def check_allowed(self) -> None:
-        """Still allowed to merge without a human? The merge gate checked at approval, but the issue's risk
-        can be raised since (a human adds risk:high), and the protected paths are checked again."""
+    def human_merges(self) -> str:
+        """Why a human merges this PR rather than the Integrator ("" when it may merge it). Asked right before
+        the merge: the issue's risk can be raised while the PR is tested (a human adds risk:high)."""
         pr = self.pr
         if self.issue and not self.cfg.high_risk_ok and "risk:high" in self.gh.labels(self.issue):
-            self.move("agent:needs-human")
-            self.say(f"✋ **Merge queue:** #{self.issue} is now **high risk**, so a human merges #{pr}. It leaves the queue.")
-            self.note(f"🚦 **Merge queue**: #{pr} is high risk now, a human merges it")
-            self.finish("left")
+            return f"#{self.issue} is **high risk**, so a human merges #{pr}."
         touched = [f for f in self.gh.pr_files(pr) if f.startswith(self.cfg.protected)]
         if touched:
-            self.move("agent:needs-human")
             listing = "\n".join(f"- `{f}`" for f in touched)
-            self.say(f"✋ **Merge queue:** #{pr} changes the agent team's own tooling, so a human merges it:\n{listing}")
-            self.finish("left")
+            return f"#{pr} changes the agent team's own tooling:\n{listing}\n\nSo a human merges it."
+        return ""
+
+    def hand_over(self, head: str, why: str, *, qa: bool) -> None:
+        """5., for a human: the PR is exactly what the Integrator would merge now, so the human gets it there."""
+        pr, base = self.pr, self.base
+        tested = f"approved, up to date with `{base}`, the required checks passed on it" + (", and QA passed it" if qa else "")
+        # Posted while the PR is still agent:integrating: the handover names the commit the queue tested.
+        self.say(
+            f"<!-- agent:ready-to-merge {head} -->\n✅ **Ready for a human to merge.** {why}\n\n"
+            f"The merge queue tested it like any other PR: `{head[:7]}` is {tested}. Merge exactly `{head[:7]}`. "
+            f"If `{base}` moves on before you do, apply `agent:approved` to send it through the queue again."
+        )
+        self.move("agent:needs-human")
+        self.note(f"🚦 **Merge queue**: #{pr} passed the queue's tests, ready for a human to merge")
+        self.finish("handed")
 
     def update(self, head: str) -> tuple[str, str]:
         """2. Brings the PR up to date with the base. Returns the head to test and a note for messages."""

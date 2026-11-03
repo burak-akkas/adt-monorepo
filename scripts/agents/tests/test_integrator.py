@@ -97,19 +97,6 @@ class LeavesTheQueueTest(unittest.TestCase):
         self.assertEqual(integrate(gh, S, 101, Config(), clock=FakeClock(), log=lambda _: None), "left")
         self.assertIn("no recorded approval for", gh.bodies(101)[-1])
 
-    def test_high_risk_and_protected_paths_need_a_human(self) -> None:
-        q = Queue()
-        q.gh.add_label(11, "risk:high")
-        self.assertEqual(q.run(), "left")
-        self.assertEqual(q.gh.agent_labels(101), ["agent:needs-human"])
-        self.assertIn("#11 is now **high risk**, so a human merges #101", q.last())
-        q = Queue()
-        q.gh.add_label(11, "risk:high")
-        self.assertEqual(q.run(high_risk_ok=True), "merged")
-        q = Queue(files=(".github/workflows/ci.yml", "src/a.ts", "scripts/x.sh"))
-        self.assertEqual(q.run(), "left")
-        self.assertIn("changes the agent team's own tooling, so a human merges it:\n- `.github/workflows/ci.yml`\n- `scripts/x.sh`", q.last())
-
     def test_github_refusing_the_update_needs_a_human(self) -> None:
         q = Queue()
         q.gh.base_changes_workflows()
@@ -123,6 +110,76 @@ class LeavesTheQueueTest(unittest.TestCase):
         self.assertEqual(q.run(qa_in_queue=True, qa_minutes=2), "left")
         self.assertEqual(q.gh.agent_labels(101), ["agent:qa"])
         self.assertIn("QA didn't finish within 2 minutes", q.last())
+
+
+class HumanMergesTest(unittest.TestCase):
+    """High-risk PRs and PRs that change the team's own tooling go through the queue like any other (update,
+    checks, QA), and the Integrator hands them to a human at the point where it would merge."""
+
+    def handed(self, q: Queue, head: str) -> str:
+        self.assertEqual(q.gh.merged(), [])
+        self.assertEqual(q.gh.agent_labels(101), ["agent:needs-human"])
+        self.assertEqual(q.gh.violations(), [])  # the fake audits the handoff like a merge
+        with q.gh._edit() as st:
+            self.assertEqual([a["sha"] for a in st["handoff_audit"]], [head])
+        body = next(b for b in reversed(q.gh.bodies(101)) if "agent:ready-to-merge" in b)
+        self.assertIn(f"<!-- agent:ready-to-merge {head} -->", body)
+        return body
+
+    def test_a_high_risk_pr_is_handed_over_green_and_up_to_date(self) -> None:
+        q = Queue()
+        q.gh.add_label(11, "risk:high")
+        q.gh.base_moves()
+        self.assertEqual(q.run(), "handed")
+        new = q.gh.head(101)
+        self.assertNotEqual(new, q.head)  # brought up to date first
+        body = self.handed(q, new)
+        self.assertIn("#11 is **high risk**", body)
+        self.assertIn(f"Merge exactly `{new[:7]}`", body)
+        self.assertIn("apply `agent:approved`", body)
+        self.assertIn("ready for a human to merge", q.gh.bodies(11)[-1])
+        self.assertEqual(q.gh.agent_labels(11), ["agent:pr-open"])  # the issue closes when the human merges
+
+    def test_qa_tests_it_before_the_handover(self) -> None:
+        q = Queue()
+        q.gh.add_label(11, "risk:high")
+        self.assertEqual(q.run(qa_in_queue=True, qa_minutes=2), "left")
+        self.assertEqual(q.gh.agent_labels(101), ["agent:qa"])  # the queue held for QA, as for any PR
+        q = Queue()
+        q.gh.add_label(11, "risk:high")
+        q.gh.say(101, f"<!-- agent:qa -->\n**Verdict:** pass\n<!-- agent:approved-sha {q.head} -->")
+        self.assertEqual(q.run(qa_in_queue=True), "handed")
+        self.assertIn("QA passed", self.handed(q, q.head))
+
+    def test_red_checks_go_to_the_implementor_not_to_the_human(self) -> None:
+        q = Queue()
+        q.gh.add_label(11, "risk:high")
+        q.gh.checks("fail")
+        self.assertEqual(q.run(), "bounced")
+        self.assertEqual(q.gh.agent_labels(101), ["agent:changes-requested"])
+
+    def test_risk_raised_while_it_is_tested_is_handed_over(self) -> None:
+        q = Queue()
+        with q.gh._edit() as st:
+            st["hooks"] = [{"match": "pr checks 101", "pr": 11, "labels": ["agent:pr-open", "risk:high"]}]
+        self.assertEqual(q.run(), "handed")
+        self.handed(q, q.head)
+
+    def test_protected_paths_are_handed_over_with_the_list(self) -> None:
+        q = Queue(files=(".github/workflows/ci.yml", "src/a.ts", "scripts/x.sh"))
+        self.assertEqual(q.run(), "handed")
+        self.assertIn("changes the agent team's own tooling:\n- `.github/workflows/ci.yml`\n- `scripts/x.sh`", self.handed(q, q.head))
+
+    def test_the_fake_flags_a_handover_of_an_untested_commit(self) -> None:
+        q = Queue()
+        q.gh.checks("fail")
+        q.gh.comment(101, f"<!-- agent:ready-to-merge {q.head} -->")  # through gh, as the Integrator posts it
+        self.assertEqual([v["kind"] for v in q.gh.violations()], ["unsafe-handoff"])
+
+    def test_allowed_explicitly_it_merges(self) -> None:
+        q = Queue()
+        q.gh.add_label(11, "risk:high")
+        self.assertEqual(q.run(high_risk_ok=True), "merged")
 
 
 class FailuresTest(unittest.TestCase):

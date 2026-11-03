@@ -127,8 +127,10 @@
       "protected": 0.3
     },
     "expect": [
+      "handed",
       "needs-human"
-    ]
+    ],
+    "quick": true
   },
   "pause window": {
     "prs": 5,
