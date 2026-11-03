@@ -33,6 +33,7 @@ describe("BoardsService", () => {
   let alice: string;
   let bob: string;
   const emails = [`alice-${run}@boards-spec.test`, `bob-${run}@boards-spec.test`];
+  const [aliceEmail, bobEmail] = emails;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -54,11 +55,11 @@ describe("BoardsService", () => {
   });
 
   it("creates the default board once, with To do, Doing and Done in order", async () => {
-    const [first, second] = await Promise.all([service.list(alice), service.list(alice)]);
+    const [first, second] = await Promise.all([service.list(alice, aliceEmail), service.list(alice, aliceEmail)]);
     expect(first).toHaveLength(1);
     expect(second).toHaveLength(1);
-    expect(await service.list(alice)).toHaveLength(1);
-    const board = await service.get(first[0].id, alice);
+    expect(await service.list(alice, aliceEmail)).toHaveLength(1);
+    const board = await service.get(first[0].id, alice, aliceEmail);
     expect(board.name).toBe("My board");
     expect(board.lists.map((l) => [l.name, l.position])).toEqual([["To do", 0], ["Doing", 1], ["Done", 2]]);
   });
@@ -95,7 +96,7 @@ describe("BoardsService", () => {
     expect(copy.name).toBe("Source (copy)");
     expect((await service.duplicate(source.id, alice)).name).toBe("Source (copy 2)");
 
-    const detail = await service.get(copy.id, alice);
+    const detail = await service.get(copy.id, alice, aliceEmail);
     expect(detail.lists.map((l) => l.name)).toEqual(["B", "A"]);
     expect(detail.lists[0].cards.map((c) => c.title)).toEqual(["first", "second"]);
     expect(detail.lists[0].cards[0]).toMatchObject({ notes: "n", cover: "red", priority: "medium", dueDate: null });
@@ -126,12 +127,12 @@ describe("BoardsService", () => {
     });
     await prisma.cardActivity.create({ data: { cardId: card.id, type: "created" } });
 
-    const original = await service.get(source.id, alice);
+    const original = await service.get(source.id, alice, aliceEmail);
     expect(original.lists[0].cards[1]).toMatchObject({ id: plain.id, checklist: [], comments: [], labels: [], activity: [] });
     expect(original.lists[0].cards[0].activity).toHaveLength(1);
 
-    const copy = await service.get((await service.duplicate(source.id, alice)).id, alice);
-    const copied = copy.lists[0].cards[0];
+    const copy = await service.get((await service.duplicate(source.id, alice)).id, alice, aliceEmail);
+    const copied =copy.lists[0].cards[0];
     expect(copied.id).not.toBe(card.id);
     expect(copied.checklist.map((i) => [i.text, i.done, i.position])).toEqual([["first", true, 0], ["second", false, 1]]);
     expect(copied.checklist[0].id).not.toBe(original.lists[0].cards[0].checklist[0].id);
@@ -159,10 +160,10 @@ describe("BoardsService", () => {
       },
     });
 
-    const original = await service.get(source.id, alice);
+    const original = await service.get(source.id, alice, aliceEmail);
     expect(original.templates.map((t) => t.name)).toEqual(["First", "Second"]);
 
-    const copy = await service.get((await service.duplicate(source.id, alice)).id, alice);
+    const copy = await service.get((await service.duplicate(source.id, alice)).id, alice, aliceEmail);
     expect(copy.templates.map((t) => t.name)).toEqual(["First", "Second"]);
     expect(copy.templates[0]).toMatchObject({
       boardId: copy.id,
@@ -174,17 +175,17 @@ describe("BoardsService", () => {
       checklist: ["one", "two"],
     });
     expect(copy.templates[0].id).not.toBe(original.templates[0].id);
-    expect((await service.get(source.id, alice)).templates).toHaveLength(2);
+    expect((await service.get(source.id, alice, aliceEmail)).templates).toHaveLength(2);
   });
 
   it("refuses to delete the last board and cascades the rest", async () => {
     const only = await service.create(bob, "Bob extra");
-    const bobBoards = await service.list(bob);
+    const bobBoards = await service.list(bob, bobEmail);
     for (const board of bobBoards.filter((b) => b.id !== only.id)) {
       await service.remove(board.id, bob);
     }
     await expect(service.remove(only.id, bob)).rejects.toBeInstanceOf(ConflictException);
-    expect(await service.list(bob)).toHaveLength(1);
+    expect(await service.list(bob, bobEmail)).toHaveLength(1);
 
     const second = await service.create(bob, "Bob second");
     const list = await prisma.boardList.create({ data: { boardId: second.id, name: "L", position: 0 } });
@@ -195,14 +196,59 @@ describe("BoardsService", () => {
   });
 
   it("answers 404 and changes nothing for another user's board or an unknown id", async () => {
-    const [mine] = await service.list(alice);
-    await expect(service.get(mine.id, bob)).rejects.toBeInstanceOf(NotFoundException);
+    const [mine] = await service.list(alice, aliceEmail);
+    await expect(service.get(mine.id, bob, bobEmail)).rejects.toBeInstanceOf(NotFoundException);
     await expect(service.rename(mine.id, bob, "Stolen")).rejects.toBeInstanceOf(NotFoundException);
     await expect(service.duplicate(mine.id, bob)).rejects.toBeInstanceOf(NotFoundException);
     await expect(service.remove(mine.id, bob)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.get("does-not-exist", alice)).rejects.toBeInstanceOf(NotFoundException);
-    const after = await service.get(mine.id, alice);
+    await expect(service.get("does-not-exist", alice, aliceEmail)).rejects.toBeInstanceOf(NotFoundException);
+    const after = await service.get(mine.id, alice, aliceEmail);
     expect(after.name).toBe("My board");
     expect(after.lists).toHaveLength(3);
+  });
+
+  it("shows a shared board to its member with role editor, and the owner's boards with role owner", async () => {
+    const shared = await service.create(alice, "Shared with bob");
+    await prisma.boardMember.create({ data: { boardId: shared.id, email: bobEmail } });
+
+    const bobs = await service.list(bob, bobEmail.toUpperCase());
+    expect(bobs.find((b) => b.id === shared.id)).toMatchObject({ name: "Shared with bob", role: "editor" });
+    expect(bobs.filter((b) => b.role === "owner").length).toBeGreaterThan(0);
+    expect((await service.list(alice, aliceEmail)).find((b) => b.id === shared.id)).toMatchObject({ role: "owner" });
+    expect(await service.get(shared.id, bob, bobEmail)).toMatchObject({ id: shared.id, role: "editor" });
+    expect(await service.get(shared.id, alice, aliceEmail)).toMatchObject({ role: "owner" });
+    await expect(service.updateSettings(shared.id, bob, bobEmail, { view: "board" })).resolves.toMatchObject({ view: "board" });
+  });
+
+  it("answers 404 to an editor who renames, deletes or duplicates, and changes nothing", async () => {
+    const shared = await service.create(alice, "Owner only");
+    await prisma.boardMember.create({ data: { boardId: shared.id, email: bobEmail } });
+    const before = await prisma.board.count({ where: { userId: alice } });
+
+    await expect(service.rename(shared.id, bob, "Hijacked")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.remove(shared.id, bob)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.duplicate(shared.id, bob)).rejects.toBeInstanceOf(NotFoundException);
+
+    expect((await prisma.board.findUniqueOrThrow({ where: { id: shared.id } })).name).toBe("Owner only");
+    expect(await prisma.board.count({ where: { userId: alice } })).toBe(before);
+    expect(await prisma.board.count({ where: { userId: bob, name: { startsWith: "Owner only" } } })).toBe(0);
+  });
+
+  it("keeps name uniqueness per owner: a shared board's name does not block the editor", async () => {
+    const shared = await service.create(alice, "Same name");
+    await prisma.boardMember.create({ data: { boardId: shared.id, email: bobEmail } });
+    await expect(service.create(bob, "Same name")).resolves.toMatchObject({ name: "Same name", role: "owner" });
+    await expect(service.create(alice, "same name")).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it("gives a user who only has shared boards a default board of their own", async () => {
+    const carol = await prisma.user.create({
+      data: { id: `carol-${run}-id`, name: "carol", email: `carol-${run}@boards-spec.test` },
+    });
+    const shared = await service.create(alice, "For carol");
+    await prisma.boardMember.create({ data: { boardId: shared.id, email: carol.email } });
+    const boards = await service.list(carol.id, carol.email);
+    expect(boards.map((b) => b.role).sort()).toEqual(["editor", "owner"]);
+    expect(boards.find((b) => b.role === "owner")?.name).toBe("My board");
   });
 });

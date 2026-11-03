@@ -16,6 +16,7 @@ describe("TemplatesService", () => {
   let alice: string;
   let bob: string;
   const emails = [`alice-${run}@templates-spec.test`, `bob-${run}@templates-spec.test`];
+  const [aliceEmail, bobEmail] = emails;
 
   const newBoard = (userId: string, name: string, lists: string[] = ["To do", "Doing"]) =>
     prisma.board.create({
@@ -52,7 +53,7 @@ describe("TemplatesService", () => {
 
   it("creates, lists, renames and deletes templates, keeping the card fields without done flag or due date", async () => {
     const board = await newBoard(alice, "CRUD");
-    const created = await service.create(board.id, alice, {
+    const created = await service.create(board.id, alice, aliceEmail, {
       ...body("Bug report", { notes: "steps", cover: "red", priority: "high" }),
       labels: ["bug", "BUG", "ui"],
       checklist: ["reproduce", "fix"],
@@ -68,23 +69,23 @@ describe("TemplatesService", () => {
       checklist: ["reproduce", "fix"],
     });
     expect(created).not.toHaveProperty("dueDate");
-    await service.create(board.id, alice, body("Second"));
-    expect((await service.list(board.id, alice)).map((t) => t.name)).toEqual(["Bug report", "Second"]);
+    await service.create(board.id, alice, aliceEmail, body("Second"));
+    expect((await service.list(board.id, alice, aliceEmail)).map((t) => t.name)).toEqual(["Bug report", "Second"]);
 
-    expect(await service.rename(created.id, alice, "Renamed")).toMatchObject({ id: created.id, name: "Renamed" });
-    await service.remove(created.id, alice);
-    expect((await service.list(board.id, alice)).map((t) => t.name)).toEqual(["Second"]);
+    expect(await service.rename(created.id, alice, aliceEmail, "Renamed")).toMatchObject({ id: created.id, name: "Renamed" });
+    await service.remove(created.id, alice, aliceEmail);
+    expect((await service.list(board.id, alice, aliceEmail)).map((t) => t.name)).toEqual(["Second"]);
   });
 
   it("rejects a taken name ignoring case with 409, but lets a rename keep its own name; other boards may reuse it", async () => {
     const board = await newBoard(alice, "Names");
-    const first = await service.create(board.id, alice, body("Alpha"));
-    const second = await service.create(board.id, alice, body("Beta"));
-    await expect(service.create(board.id, alice, body("ALPHA"))).rejects.toBeInstanceOf(ConflictException);
-    await expect(service.rename(second.id, alice, "alpha")).rejects.toBeInstanceOf(ConflictException);
-    await expect(service.rename(first.id, alice, "ALPHA")).resolves.toMatchObject({ name: "ALPHA" });
+    const first = await service.create(board.id, alice, aliceEmail, body("Alpha"));
+    const second = await service.create(board.id, alice, aliceEmail, body("Beta"));
+    await expect(service.create(board.id, alice, aliceEmail, body("ALPHA"))).rejects.toBeInstanceOf(ConflictException);
+    await expect(service.rename(second.id, alice, aliceEmail, "alpha")).rejects.toBeInstanceOf(ConflictException);
+    await expect(service.rename(first.id, alice, aliceEmail, "ALPHA")).resolves.toMatchObject({ name: "ALPHA" });
     const other = await newBoard(alice, "Names 2");
-    await expect(service.create(other.id, alice, body("alpha"))).resolves.toMatchObject({ name: "alpha" });
+    await expect(service.create(other.id, alice, aliceEmail, body("alpha"))).resolves.toMatchObject({ name: "alpha" });
   });
 
   it("backs name uniqueness with a case-insensitive unique index", async () => {
@@ -100,13 +101,13 @@ describe("TemplatesService", () => {
     await prisma.cardTemplate.createMany({
       data: Array.from({ length: MAX_TEMPLATES }, (_, i) => ({ boardId: board.id, name: `T${i}`, title: "t" })),
     });
-    await expect(service.create(board.id, alice, body("One too many"))).rejects.toThrow(/at most 30/);
-    await expect(service.create(board.id, alice, body("One too many"))).rejects.toBeInstanceOf(ConflictException);
+    await expect(service.create(board.id, alice, aliceEmail, body("One too many"))).rejects.toThrow(/at most 30/);
+    await expect(service.create(board.id, alice, aliceEmail, body("One too many"))).rejects.toBeInstanceOf(ConflictException);
     expect(await prisma.cardTemplate.count({ where: { boardId: board.id } })).toBe(MAX_TEMPLATES);
     // Deleting one makes room again.
-    const [first] = await service.list(board.id, alice);
-    await service.remove(first.id, alice);
-    await expect(service.create(board.id, alice, body("Fits now"))).resolves.toMatchObject({ name: "Fits now" });
+    const [first] = await service.list(board.id, alice, aliceEmail);
+    await service.remove(first.id, alice, aliceEmail);
+    await expect(service.create(board.id, alice, aliceEmail, body("Fits now"))).resolves.toMatchObject({ name: "Fits now" });
   });
 
   it("creates a card in the given list: appended, dense positions, unticked checklist, labels, no due date", async () => {
@@ -118,13 +119,13 @@ describe("TemplatesService", () => {
         { listId: doing.id, title: "b", position: 1 },
       ],
     });
-    const template = await service.create(board.id, alice, {
+    const template = await service.create(board.id, alice, aliceEmail, {
       ...body("Full", { notes: "n", cover: "teal", priority: "low" }),
       labels: ["x", "y"],
       checklist: ["one", "two"],
     });
 
-    const card = await service.createCardFromTemplate(template.id, alice, doing.id);
+    const card = await service.createCardFromTemplate(template.id, alice, aliceEmail, doing.id);
     expect(card).toMatchObject({
       listId: doing.id,
       title: "Title",
@@ -145,11 +146,11 @@ describe("TemplatesService", () => {
   it("falls back to the first list for a missing, unknown or foreign list, and never touches the foreign one", async () => {
     const board = await newBoard(alice, "Fallback");
     const foreign = await newBoard(alice, "Foreign");
-    const template = await service.create(board.id, alice, body("T"));
+    const template = await service.create(board.id, alice, aliceEmail, body("T"));
 
-    expect(await service.createCardFromTemplate(template.id, alice)).toMatchObject({ listId: board.lists[0].id, position: 0 });
-    expect(await service.createCardFromTemplate(template.id, alice, "nope")).toMatchObject({ listId: board.lists[0].id, position: 1 });
-    expect(await service.createCardFromTemplate(template.id, alice, foreign.lists[0].id)).toMatchObject({
+    expect(await service.createCardFromTemplate(template.id, alice, aliceEmail)).toMatchObject({ listId: board.lists[0].id, position: 0 });
+    expect(await service.createCardFromTemplate(template.id, alice, aliceEmail, "nope")).toMatchObject({ listId: board.lists[0].id, position: 1 });
+    expect(await service.createCardFromTemplate(template.id, alice, aliceEmail, foreign.lists[0].id)).toMatchObject({
       listId: board.lists[0].id,
       position: 2,
     });
@@ -158,22 +159,39 @@ describe("TemplatesService", () => {
 
   it("answers 404 and changes nothing for another user's board or template", async () => {
     const board = await newBoard(alice, "Private");
-    const template = await service.create(board.id, alice, body("Mine"));
+    const template = await service.create(board.id, alice, aliceEmail, body("Mine"));
 
-    await expect(service.list(board.id, bob)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.create(board.id, bob, body("Stolen"))).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.rename(template.id, bob, "Stolen")).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.remove(template.id, bob)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.createCardFromTemplate(template.id, bob, board.lists[0].id)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.rename("does-not-exist", alice, "x")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.list(board.id, bob, bobEmail)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.create(board.id, bob, bobEmail, body("Stolen"))).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.rename(template.id, bob, bobEmail, "Stolen")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.remove(template.id, bob, bobEmail)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.createCardFromTemplate(template.id, bob, bobEmail, board.lists[0].id)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.rename("does-not-exist", alice, aliceEmail, "x")).rejects.toBeInstanceOf(NotFoundException);
 
-    expect((await service.list(board.id, alice)).map((t) => t.name)).toEqual(["Mine"]);
+    expect((await service.list(board.id, alice, aliceEmail)).map((t) => t.name)).toEqual(["Mine"]);
     expect(await prisma.card.count({ where: { listId: board.lists[0].id } })).toBe(0);
+  });
+
+  it("lets a member use the templates of a shared board, and stops at once when they are removed", async () => {
+    const board = await newBoard(alice, "Shared");
+    const template = await service.create(board.id, alice, aliceEmail, body("Mine"));
+    await prisma.boardMember.create({ data: { boardId: board.id, email: bobEmail } });
+
+    expect((await service.list(board.id, bob, bobEmail.toUpperCase())).map((t) => t.name)).toEqual(["Mine"]);
+    const theirs = await service.create(board.id, bob, bobEmail, body("Theirs"));
+    await expect(service.rename(theirs.id, bob, bobEmail, "Theirs 2")).resolves.toMatchObject({ name: "Theirs 2" });
+    await expect(service.createCardFromTemplate(template.id, bob, bobEmail)).resolves.toMatchObject({ listId: board.lists[0].id });
+    await service.remove(theirs.id, bob, bobEmail);
+
+    await prisma.boardMember.deleteMany({ where: { boardId: board.id } });
+    await expect(service.list(board.id, bob, bobEmail)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.remove(template.id, bob, bobEmail)).rejects.toBeInstanceOf(NotFoundException);
+    expect(await prisma.cardTemplate.count({ where: { boardId: board.id } })).toBe(1);
   });
 
   it("deletes the templates with their board", async () => {
     const board = await newBoard(bob, "Doomed");
-    await service.create(board.id, bob, body("Gone"));
+    await service.create(board.id, bob, bobEmail, body("Gone"));
     await prisma.board.delete({ where: { id: board.id } });
     expect(await prisma.cardTemplate.count({ where: { boardId: board.id } })).toBe(0);
   });

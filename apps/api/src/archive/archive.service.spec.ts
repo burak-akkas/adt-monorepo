@@ -22,6 +22,7 @@ describe("ArchiveService", () => {
   let alice: string;
   let bob: string;
   const emails = [`alice-${run}@archive-spec.test`, `bob-${run}@archive-spec.test`];
+  const [aliceEmail, bobEmail] = emails;
 
   const newBoard = (userId: string, name: string, listNames: string[] = ["To do", "Doing", "Done"]) =>
     prisma.board.create({
@@ -63,17 +64,17 @@ describe("ArchiveService", () => {
     const [todo] = board.lists;
     const [a, b, c] = await addCards(todo.id, ["a", "b", "c"]);
 
-    const first = await archive.archive(b.id, alice);
+    const first = await archive.archive(b.id, alice, aliceEmail);
     expect(archivedCardSchema.parse(first)).toMatchObject({ id: b.id, boardId: board.id, title: "b" });
     expect(await inList(todo.id)).toEqual([["a", 0], ["c", 1]]);
     const row = await prisma.card.findUniqueOrThrow({ where: { id: b.id } });
     expect(row).toMatchObject({ listId: null, boardId: board.id, position: 0 });
     expect(row.archivedAt).toBeInstanceOf(Date);
 
-    await archive.archive(a.id, alice);
+    await archive.archive(a.id, alice, aliceEmail);
     expect(await inList(todo.id)).toEqual([["c", 0]]);
-    await archive.archive(c.id, alice);
-    expect((await archive.list(board.id, alice)).map((card) => card.title)).toEqual(["b", "a", "c"]);
+    await archive.archive(c.id, alice, aliceEmail);
+    expect((await archive.list(board.id, alice, aliceEmail)).map((card) => card.title)).toEqual(["b", "a", "c"]);
   });
 
   it("archives all cards of the done list in order, and nothing when there is no done list", async () => {
@@ -82,15 +83,15 @@ describe("ArchiveService", () => {
     await addCards(todo.id, ["keep"]);
     await addCards(done.id, ["x", "y", "z"]);
 
-    const archived = await archive.archiveDone(board.id, alice);
+    const archived = await archive.archiveDone(board.id, alice, aliceEmail);
     expect(archived.map((card) => card.title)).toEqual(["x", "y", "z"]);
-    expect((await archive.list(board.id, alice)).map((card) => card.title)).toEqual(["x", "y", "z"]);
+    expect((await archive.list(board.id, alice, aliceEmail)).map((card) => card.title)).toEqual(["x", "y", "z"]);
     expect(await inList(done.id)).toEqual([]);
     expect(await inList(todo.id)).toEqual([["keep", 0]]);
 
     const plain = await newBoard(alice, "NoDone", ["One", "Two"]);
     await addCards(plain.lists[0].id, ["stay"]);
-    expect(await archive.archiveDone(plain.id, alice)).toEqual([]);
+    expect(await archive.archiveDone(plain.id, alice, aliceEmail)).toEqual([]);
     expect(await inList(plain.lists[0].id)).toEqual([["stay", 0]]);
   });
 
@@ -99,7 +100,7 @@ describe("ArchiveService", () => {
     const [todo] = board.lists;
     await addCards(todo.id, ["p", "q"]);
     await prisma.board.update({ where: { id: board.id }, data: { doneListId: todo.id } });
-    expect((await archive.archiveDone(board.id, alice)).map((card) => card.title)).toEqual(["p", "q"]);
+    expect((await archive.archiveDone(board.id, alice, aliceEmail)).map((card) => card.title)).toEqual(["p", "q"]);
   });
 
   it("restores to a chosen list, the done list or the last list, appending at the end", async () => {
@@ -108,22 +109,22 @@ describe("ArchiveService", () => {
     const [a, b, c] = await addCards(todo.id, ["a", "b", "c"]);
     await addCards(doing.id, ["d1", "d2"]);
     await addCards(done.id, ["e1"]);
-    await archive.archive(a.id, alice);
-    await archive.archive(b.id, alice);
-    await archive.archive(c.id, alice);
+    await archive.archive(a.id, alice, aliceEmail);
+    await archive.archive(b.id, alice, aliceEmail);
+    await archive.archive(c.id, alice, aliceEmail);
 
-    const chosen = await archive.restore(a.id, alice, doing.id);
+    const chosen = await archive.restore(a.id, alice, aliceEmail, doing.id);
     expect(chosen).toMatchObject({ id: a.id, listId: doing.id, position: 2 });
     expect(await prisma.card.findUniqueOrThrow({ where: { id: a.id } })).toMatchObject({ boardId: null, archivedAt: null });
 
-    expect(await archive.restore(b.id, alice)).toMatchObject({ listId: done.id, position: 1 });
+    expect(await archive.restore(b.id, alice, aliceEmail)).toMatchObject({ listId: done.id, position: 1 });
 
     const noDone = await newBoard(alice, "RestoreLast", ["One", "Two"]);
     const [card] = await addCards(noDone.lists[0].id, ["only"]);
-    await archive.archive(card.id, alice);
-    expect(await archive.restore(card.id, alice)).toMatchObject({ listId: noDone.lists[1].id, position: 0 });
+    await archive.archive(card.id, alice, aliceEmail);
+    expect(await archive.restore(card.id, alice, aliceEmail)).toMatchObject({ listId: noDone.lists[1].id, position: 0 });
 
-    expect((await archive.list(board.id, alice)).map((x) => x.title)).toEqual(["c"]);
+    expect((await archive.list(board.id, alice, aliceEmail)).map((x) => x.title)).toEqual(["c"]);
     expect(await inList(doing.id)).toEqual([["d1", 0], ["d2", 1], ["a", 2]]);
   });
 
@@ -136,21 +137,21 @@ describe("ArchiveService", () => {
     const types = async (cardId: string) =>
       (await prisma.cardActivity.findMany({ where: { cardId }, orderBy: [{ at: "desc" }, { id: "desc" }] })).map((e) => e.type);
 
-    await archive.archive(single.id, alice);
+    await archive.archive(single.id, alice, aliceEmail);
     expect(await types(single.id)).toEqual(["archived"]);
 
-    await lists.archiveCards(doing.id, alice);
+    await lists.archiveCards(doing.id, alice, emails[0]);
     for (const card of doingCards) expect(await types(card.id)).toEqual(["archived"]);
-    expect(await lists.archiveCards(doing.id, alice)).toEqual([]);
+    expect(await lists.archiveCards(doing.id, alice, emails[0])).toEqual([]);
 
-    await archive.archiveDone(board.id, alice);
+    await archive.archiveDone(board.id, alice, aliceEmail);
     for (const card of doneCards) expect(await types(card.id)).toEqual(["archived"]);
 
     const row = await prisma.card.findUniqueOrThrow({ where: { id: doneCards[1].id } });
     const entry = await prisma.cardActivity.findFirstOrThrow({ where: { cardId: doneCards[1].id } });
     expect(entry.at).toEqual(row.archivedAt);
 
-    await archive.restore(single.id, alice);
+    await archive.restore(single.id, alice, aliceEmail);
     expect(await types(single.id)).toEqual(["restored", "archived"]);
   });
 
@@ -158,11 +159,11 @@ describe("ArchiveService", () => {
     const board = await newBoard(alice, "Strict");
     const other = await newBoard(alice, "Other");
     const [a, live] = await addCards(board.lists[0].id, ["a", "live"]);
-    await archive.archive(a.id, alice);
-    await expect(archive.restore(a.id, alice, other.lists[0].id)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(archive.restore(a.id, alice, "nope")).rejects.toBeInstanceOf(NotFoundException);
-    await expect(archive.restore(live.id, alice)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(archive.restore("nope", alice)).rejects.toBeInstanceOf(NotFoundException);
+    await archive.archive(a.id, alice, aliceEmail);
+    await expect(archive.restore(a.id, alice, aliceEmail, other.lists[0].id)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(archive.restore(a.id, alice, aliceEmail, "nope")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(archive.restore(live.id, alice, aliceEmail)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(archive.restore("nope", alice, aliceEmail)).rejects.toBeInstanceOf(NotFoundException);
     expect(await prisma.card.findUniqueOrThrow({ where: { id: a.id } })).toMatchObject({ listId: null, boardId: board.id });
   });
 
@@ -171,34 +172,34 @@ describe("ArchiveService", () => {
     const other = await newBoard(alice, "Delete other");
     const [a, b, live] = await addCards(board.lists[0].id, ["a", "b", "live"]);
     const [o] = await addCards(other.lists[0].id, ["o"]);
-    await archive.archive(a.id, alice);
-    await archive.archive(b.id, alice);
-    await archive.archive(o.id, alice);
+    await archive.archive(a.id, alice, aliceEmail);
+    await archive.archive(b.id, alice, aliceEmail);
+    await archive.archive(o.id, alice, aliceEmail);
 
-    await archive.remove(a.id, alice);
+    await archive.remove(a.id, alice, aliceEmail);
     expect(await prisma.card.findUnique({ where: { id: a.id } })).toBeNull();
-    await expect(archive.remove(a.id, alice)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(archive.remove(live.id, alice)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(archive.remove(a.id, alice, aliceEmail)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(archive.remove(live.id, alice, aliceEmail)).rejects.toBeInstanceOf(NotFoundException);
     expect(await prisma.card.findUnique({ where: { id: live.id } })).not.toBeNull();
 
-    await archive.empty(board.id, alice);
-    expect(await archive.list(board.id, alice)).toEqual([]);
+    await archive.empty(board.id, alice, aliceEmail);
+    expect(await archive.list(board.id, alice, aliceEmail)).toEqual([]);
     expect(await inList(board.lists[0].id)).toEqual([["live", 0]]);
-    expect((await archive.list(other.id, alice)).map((card) => card.title)).toEqual(["o"]);
+    expect((await archive.list(other.id, alice, aliceEmail)).map((card) => card.title)).toEqual(["o"]);
   });
 
   it("answers 404 and changes nothing for another user's board or card", async () => {
     const board = await newBoard(alice, "Private");
     const [live, kept] = await addCards(board.lists[0].id, ["live", "kept"]);
-    await archive.archive(kept.id, alice);
+    await archive.archive(kept.id, alice, aliceEmail);
     const done = await addCards(board.lists[2].id, ["done"]);
 
-    await expect(archive.list(board.id, bob)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(archive.archive(live.id, bob)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(archive.archiveDone(board.id, bob)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(archive.restore(kept.id, bob)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(archive.remove(kept.id, bob)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(archive.empty(board.id, bob)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(archive.list(board.id, bob, bobEmail)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(archive.archive(live.id, bob, bobEmail)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(archive.archiveDone(board.id, bob, bobEmail)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(archive.restore(kept.id, bob, bobEmail)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(archive.remove(kept.id, bob, bobEmail)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(archive.empty(board.id, bob, bobEmail)).rejects.toBeInstanceOf(NotFoundException);
 
     expect(await prisma.card.findUniqueOrThrow({ where: { id: live.id } })).toMatchObject({ listId: board.lists[0].id });
     expect(await prisma.card.findUniqueOrThrow({ where: { id: kept.id } })).toMatchObject({ listId: null, boardId: board.id });
@@ -208,12 +209,12 @@ describe("ArchiveService", () => {
   it("hides archived cards from lists and from the card endpoints", async () => {
     const board = await newBoard(alice, "Hidden");
     const [a] = await addCards(board.lists[0].id, ["a", "b"]);
-    await archive.archive(a.id, alice);
+    await archive.archive(a.id, alice, aliceEmail);
 
-    const detail = boardDetailSchema.parse(await boards.get(board.id, alice));
+    const detail = boardDetailSchema.parse(await boards.get(board.id, alice, emails[0]));
     expect(detail.lists[0].cards.map((card) => card.title)).toEqual(["b"]);
     expect(detail.archive.map((card) => card.title)).toEqual(["a"]);
-    await expect(boards.get(board.id, bob)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(boards.get(board.id, bob, emails[1])).rejects.toBeInstanceOf(NotFoundException);
 
     await expect(cards.get(a.id, alice, emails[0])).rejects.toBeInstanceOf(NotFoundException);
     await expect(cards.update(a.id, alice, emails[0], { title: "x" })).rejects.toBeInstanceOf(NotFoundException);
@@ -226,11 +227,11 @@ describe("ArchiveService", () => {
     const board = await newBoard(alice, "Lists");
     const [todo, doing] = board.lists;
     const [a, b] = await addCards(todo.id, ["a", "b"]);
-    await archive.archive(a.id, alice);
+    await archive.archive(a.id, alice, aliceEmail);
 
-    await lists.remove(todo.id, alice, doing.id);
+    await lists.remove(todo.id, alice, emails[0], doing.id);
     expect(await prisma.boardList.findUnique({ where: { id: todo.id } })).toBeNull();
-    expect((await archive.list(board.id, alice)).map((card) => card.title)).toEqual(["a"]);
+    expect((await archive.list(board.id, alice, aliceEmail)).map((card) => card.title)).toEqual(["a"]);
     expect(await inList(doing.id)).toEqual([["b", 0]]);
     expect(await prisma.card.findUniqueOrThrow({ where: { id: b.id } })).toMatchObject({ listId: doing.id });
 
@@ -242,13 +243,13 @@ describe("ArchiveService", () => {
   it("does not copy the archive when duplicating a board", async () => {
     const board = await newBoard(alice, "Dup");
     const [a] = await addCards(board.lists[0].id, ["a", "live"]);
-    await archive.archive(a.id, alice);
+    await archive.archive(a.id, alice, aliceEmail);
 
     const copy = await boards.duplicate(board.id, alice);
-    const detail = await boards.get(copy.id, alice);
+    const detail = await boards.get(copy.id, alice, emails[0]);
     expect(detail.archive).toEqual([]);
     expect(detail.lists[0].cards.map((card) => card.title)).toEqual(["live"]);
     expect(await prisma.card.count({ where: { boardId: copy.id } })).toBe(0);
-    expect((await archive.list(board.id, alice)).map((card) => card.title)).toEqual(["a"]);
+    expect((await archive.list(board.id, alice, aliceEmail)).map((card) => card.title)).toEqual(["a"]);
   });
 });

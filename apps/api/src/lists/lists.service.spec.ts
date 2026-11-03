@@ -15,6 +15,7 @@ describe("ListsService", () => {
   let alice: string;
   let bob: string;
   const emails = [`alice-${run}@lists-spec.test`, `bob-${run}@lists-spec.test`];
+  const [aliceEmail, bobEmail] = emails;
 
   const newBoard = async (userId: string, name: string, lists: string[] = []) =>
     prisma.board.create({
@@ -45,44 +46,44 @@ describe("ListsService", () => {
 
   it("appends new lists at the end", async () => {
     const board = await newBoard(alice, "Append");
-    expect(await service.create(board.id, alice, "One")).toMatchObject({ name: "One", position: 0, boardId: board.id });
-    expect(await service.create(board.id, alice, "Two")).toMatchObject({ position: 1 });
-    expect(await service.create(board.id, alice, "Three")).toMatchObject({ position: 2 });
+    expect(await service.create(board.id, alice, aliceEmail, "One")).toMatchObject({ name: "One", position: 0, boardId: board.id });
+    expect(await service.create(board.id, alice, aliceEmail, "Two")).toMatchObject({ position: 1 });
+    expect(await service.create(board.id, alice, aliceEmail, "Three")).toMatchObject({ position: 2 });
   });
 
   it("rejects duplicate names case-insensitively with 409, but lets a rename keep its own name", async () => {
     const board = await newBoard(alice, "Names", ["Alpha", "Beta"]);
     const [alpha] = board.lists;
-    await expect(service.create(board.id, alice, "ALPHA")).rejects.toBeInstanceOf(ConflictException);
-    await expect(service.rename(alpha.id, alice, "beta")).rejects.toBeInstanceOf(ConflictException);
-    await expect(service.rename(alpha.id, alice, "Alpha")).resolves.toMatchObject({ name: "Alpha" });
-    await expect(service.rename(alpha.id, alice, "ALPHA")).resolves.toMatchObject({ name: "ALPHA" });
+    await expect(service.create(board.id, alice, aliceEmail, "ALPHA")).rejects.toBeInstanceOf(ConflictException);
+    await expect(service.rename(alpha.id, alice, aliceEmail, "beta")).rejects.toBeInstanceOf(ConflictException);
+    await expect(service.rename(alpha.id, alice, aliceEmail, "Alpha")).resolves.toMatchObject({ name: "Alpha" });
+    await expect(service.rename(alpha.id, alice, aliceEmail, "ALPHA")).resolves.toMatchObject({ name: "ALPHA" });
     // Another board may reuse the name.
     const other = await newBoard(alice, "Names 2");
-    await expect(service.create(other.id, alice, "alpha")).resolves.toMatchObject({ name: "alpha" });
+    await expect(service.create(other.id, alice, aliceEmail, "alpha")).resolves.toMatchObject({ name: "alpha" });
   });
 
   it("moves a list to the start, middle, end and past the end, keeping positions dense", async () => {
     const board = await newBoard(alice, "Move", ["A", "B", "C", "D"]);
     const [a, , , d] = board.lists;
-    await service.move(d.id, alice, 0);
+    await service.move(d.id, alice, aliceEmail, 0);
     expect(await order(board.id)).toEqual([["D", 0], ["A", 1], ["B", 2], ["C", 3]]);
-    await service.move(d.id, alice, 2);
+    await service.move(d.id, alice, aliceEmail, 2);
     expect(await order(board.id)).toEqual([["A", 0], ["B", 1], ["D", 2], ["C", 3]]);
-    const result = await service.move(a.id, alice, 99);
+    const result = await service.move(a.id, alice, aliceEmail, 99);
     expect(result.map((l) => [l.name, l.position])).toEqual([["B", 0], ["D", 1], ["C", 2], ["A", 3]]);
     expect(await order(board.id)).toEqual([["B", 0], ["D", 1], ["C", 2], ["A", 3]]);
   });
 
   it("refuses to delete the last list", async () => {
     const board = await newBoard(alice, "Last", ["Only"]);
-    await expect(service.remove(board.lists[0].id, alice)).rejects.toBeInstanceOf(ConflictException);
+    await expect(service.remove(board.lists[0].id, alice, aliceEmail)).rejects.toBeInstanceOf(ConflictException);
     expect(await order(board.id)).toEqual([["Only", 0]]);
   });
 
   it("deletes an empty list without a target and closes the gap", async () => {
     const board = await newBoard(alice, "Empty", ["A", "B", "C"]);
-    await service.remove(board.lists[1].id, alice);
+    await service.remove(board.lists[1].id, alice, aliceEmail);
     expect(await order(board.id)).toEqual([["A", 0], ["C", 1]]);
   });
 
@@ -97,7 +98,7 @@ describe("ListsService", () => {
         { listId: c.id, title: "c1", position: 1 },
       ],
     });
-    await service.remove(a.id, alice, c.id);
+    await service.remove(a.id, alice, aliceEmail, c.id);
     const cards = await prisma.card.findMany({ where: { listId: c.id }, orderBy: { position: "asc" } });
     expect(cards.map((x) => [x.title, x.position])).toEqual([["c0", 0], ["c1", 1], ["a1", 2], ["a2", 3]]);
     expect(await order(board.id)).toEqual([["B", 0], ["C", 1]]);
@@ -111,11 +112,11 @@ describe("ListsService", () => {
     const bobs = await newBoard(bob, "Bob targets", ["Z", "W"]);
     await prisma.card.create({ data: { listId: a.id, title: "keep", position: 0 } });
 
-    await expect(service.remove(a.id, alice)).rejects.toBeInstanceOf(BadRequestException);
-    await expect(service.remove(a.id, alice, a.id)).rejects.toBeInstanceOf(BadRequestException);
-    await expect(service.remove(a.id, alice, foreign.lists[0].id)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.remove(a.id, alice, bobs.lists[0].id)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.remove(a.id, alice, "does-not-exist")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.remove(a.id, alice, aliceEmail)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.remove(a.id, alice, aliceEmail, a.id)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.remove(a.id, alice, aliceEmail, foreign.lists[0].id)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.remove(a.id, alice, aliceEmail, bobs.lists[0].id)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.remove(a.id, alice, aliceEmail, "does-not-exist")).rejects.toBeInstanceOf(NotFoundException);
 
     expect(await order(board.id)).toEqual([["A", 0], ["B", 1]]);
     expect(await prisma.card.count({ where: { listId: a.id } })).toBe(1);
@@ -126,14 +127,32 @@ describe("ListsService", () => {
   it("answers 404 and changes nothing for another user's board or list", async () => {
     const board = await newBoard(alice, "Private", ["A", "B"]);
     const [a, b] = board.lists;
-    await expect(service.create(board.id, bob, "Stolen")).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.rename(a.id, bob, "Stolen")).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.move(a.id, bob, 1)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.remove(a.id, bob)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.remove(a.id, bob, b.id)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.create("does-not-exist", alice, "x")).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.rename("does-not-exist", alice, "x")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.create(board.id, bob, bobEmail, "Stolen")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.rename(a.id, bob, bobEmail, "Stolen")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.move(a.id, bob, bobEmail, 1)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.remove(a.id, bob, bobEmail)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.remove(a.id, bob, bobEmail, b.id)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.create("does-not-exist", alice, aliceEmail, "x")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.rename("does-not-exist", alice, aliceEmail, "x")).rejects.toBeInstanceOf(NotFoundException);
     expect(await order(board.id)).toEqual([["A", 0], ["B", 1]]);
+  });
+
+  it("lets a member edit the lists of a shared board, and stops at once when they are removed", async () => {
+    const board = await newBoard(alice, "Shared", ["A", "B"]);
+    const [a] = board.lists;
+    await prisma.boardMember.create({ data: { boardId: board.id, email: bobEmail } });
+
+    const created = await service.create(board.id, bob, bobEmail.toUpperCase(), "C");
+    expect(created).toMatchObject({ name: "C", position: 2 });
+    await expect(service.rename(a.id, bob, bobEmail, "A2")).resolves.toMatchObject({ name: "A2" });
+    await expect(service.setWipLimit(a.id, bob, bobEmail, 4)).resolves.toMatchObject({ wipLimit: 4 });
+    await service.move(created.id, bob, bobEmail, 0);
+    expect(await order(board.id)).toEqual([["C", 0], ["A2", 1], ["B", 2]]);
+
+    await prisma.boardMember.deleteMany({ where: { boardId: board.id } });
+    await expect(service.rename(a.id, bob, bobEmail, "Gone")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.create(board.id, bob, bobEmail, "D")).rejects.toBeInstanceOf(NotFoundException);
+    expect(await order(board.id)).toEqual([["C", 0], ["A2", 1], ["B", 2]]);
   });
 
   it("records one archived entry per card when archiving a list, and none for an empty list", async () => {
@@ -145,10 +164,10 @@ describe("ListsService", () => {
         { listId: one.id, title: "b", position: 1 },
       ],
     });
-    const archived = await service.archiveCards(one.id, alice);
+    const archived = await service.archiveCards(one.id, alice, aliceEmail);
     expect(archived.map((card) => card.activity.map((entry) => entry.type))).toEqual([["archived"], ["archived"]]);
     expect(await prisma.cardActivity.count({ where: { card: { boardId: board.id }, type: "archived" } })).toBe(2);
-    expect(await service.archiveCards(two.id, alice)).toEqual([]);
+    expect(await service.archiveCards(two.id, alice, aliceEmail)).toEqual([]);
     expect(await prisma.cardActivity.count({ where: { card: { boardId: board.id } } })).toBe(2);
   });
 
@@ -156,35 +175,35 @@ describe("ListsService", () => {
     const board = await newBoard(alice, "Wip", ["A"]);
     const [a] = board.lists;
     expect(a).toMatchObject({ wipLimit: null, collapsed: false });
-    await expect(service.setWipLimit(a.id, alice, 3)).resolves.toMatchObject({ wipLimit: 3 });
-    await expect(service.setWipLimit(a.id, alice, null)).resolves.toMatchObject({ wipLimit: null });
+    await expect(service.setWipLimit(a.id, alice, aliceEmail, 3)).resolves.toMatchObject({ wipLimit: 3 });
+    await expect(service.setWipLimit(a.id, alice, aliceEmail, null)).resolves.toMatchObject({ wipLimit: null });
   });
 
   it("answers 404 and leaves another user's list limit unchanged", async () => {
     const board = await newBoard(alice, "Wip private", ["A"]);
     const [a] = board.lists;
-    await service.setWipLimit(a.id, alice, 5);
-    await expect(service.setWipLimit(a.id, bob, 1)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.setWipLimit("does-not-exist", alice, 1)).rejects.toBeInstanceOf(NotFoundException);
+    await service.setWipLimit(a.id, alice, aliceEmail, 5);
+    await expect(service.setWipLimit(a.id, bob, bobEmail, 1)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.setWipLimit("does-not-exist", alice, aliceEmail, 1)).rejects.toBeInstanceOf(NotFoundException);
     expect((await prisma.boardList.findUniqueOrThrow({ where: { id: a.id } })).wipLimit).toBe(5);
   });
 
   it("returns the limit and collapsed flag on create, rename and move", async () => {
     const board = await newBoard(alice, "Shape", ["A"]);
-    const created = await service.create(board.id, alice, "B");
+    const created = await service.create(board.id, alice, aliceEmail, "B");
     expect(created).toMatchObject({ wipLimit: null, collapsed: false });
-    expect(await service.rename(created.id, alice, "C")).toMatchObject({ wipLimit: null, collapsed: false });
-    expect((await service.move(created.id, alice, 0))[0]).toMatchObject({ wipLimit: null, collapsed: false });
+    expect(await service.rename(created.id, alice, aliceEmail, "C")).toMatchObject({ wipLimit: null, collapsed: false });
+    expect((await service.move(created.id, alice, aliceEmail, 0))[0]).toMatchObject({ wipLimit: null, collapsed: false });
   });
 
   it("on delete keeps the last name, drops the limit and clears the insights lists", async () => {
     const board = await newBoard(alice, "Former", ["Keep", "Gone"]);
     const [keep, gone] = board.lists;
-    await service.setWipLimit(gone.id, alice, 2);
+    await service.setWipLimit(gone.id, alice, aliceEmail, 2);
     await prisma.boardList.update({ where: { id: gone.id }, data: { collapsed: true } });
     await prisma.board.update({ where: { id: board.id }, data: { doingListId: gone.id, doneListId: keep.id } });
 
-    await service.remove(gone.id, alice);
+    await service.remove(gone.id, alice, aliceEmail);
 
     expect(await prisma.boardList.findUnique({ where: { id: gone.id } })).toBeNull();
     const after = await prisma.board.findUniqueOrThrow({ where: { id: board.id }, include: { formerLists: true } });
