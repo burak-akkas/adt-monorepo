@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../support/fixtures";
 import { editCard, moveCardTo } from "../../support/cardActions";
 
 test.beforeEach(async ({ page }) => {

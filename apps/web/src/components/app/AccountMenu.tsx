@@ -24,8 +24,8 @@ export function AccountMenu() {
     );
   }
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-      <span className="min-w-0 max-w-[12rem] truncate text-sm text-subtle">{user.email}</span>
+    <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+      <span className="max-w-[12rem] min-w-0 truncate text-sm text-subtle">{user.email}</span>
       <Link href="/account" className={linkClass}>
         Account
       </Link>
