@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Inject, Param, Post, UseGuards } from "@nestjs/common";
 import { addLabelRequestSchema, type AddLabelRequest, type CardResponse } from "@adt/contracts";
-import { SessionGuard, UserId } from "../auth/session.guard.js";
+import { SessionGuard, UserEmail, UserId } from "../auth/session.guard.js";
 import { ZodValidationPipe } from "../common/zod-validation.pipe.js";
 import { LabelsService } from "./labels.service.js";
 
@@ -12,14 +12,20 @@ export class LabelsController {
   @Post()
   add(
     @UserId() userId: string,
+    @UserEmail() email: string,
     @Param("cardId") cardId: string,
     @Body(new ZodValidationPipe(addLabelRequestSchema)) body: AddLabelRequest,
   ): Promise<CardResponse> {
-    return this.labels.add(cardId, userId, body.name);
+    return this.labels.add(cardId, userId, email, body.name);
   }
 
   @Delete(":name")
-  remove(@UserId() userId: string, @Param("cardId") cardId: string, @Param("name") name: string): Promise<CardResponse> {
-    return this.labels.remove(cardId, userId, name);
+  remove(
+    @UserId() userId: string,
+    @UserEmail() email: string,
+    @Param("cardId") cardId: string,
+    @Param("name") name: string,
+  ): Promise<CardResponse> {
+    return this.labels.remove(cardId, userId, email, name);
   }
 }

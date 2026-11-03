@@ -2,6 +2,7 @@ import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import type { ArchivedCard, CardResponse } from "@adt/contracts";
 import type { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
+import { boardAccessWhere } from "../boards/board-access.js";
 import { insightsListIds } from "../boards/insights-lists.js";
 import { recordActivity } from "../cards/activity.js";
 import { cardDetails, toArchivedCard, toCard } from "../cards/card.mapper.js";
@@ -13,9 +14,9 @@ export const archiveOrder = [{ archivedAt: "asc" }, { id: "asc" }] satisfies Pri
 export class ArchiveService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
-  /** Loads a board only through its owner, so another user's board is simply not found. */
-  private async findOwnedBoard(tx: Prisma.TransactionClient, id: string, userId: string) {
-    const board = await tx.board.findFirst({ where: { id, userId } });
+  /** Loads a board only through its owner or a member, so any other board is simply not found. */
+  private async findAccessibleBoard(tx: Prisma.TransactionClient, id: string, userId: string, email: string) {
+    const board = await tx.board.findFirst({ where: { AND: [{ id }, boardAccessWhere(userId, email)] } });
     if (!board) {
       throw new NotFoundException("Board not found");
     }
@@ -32,8 +33,8 @@ export class ArchiveService {
     }
   }
 
-  async list(boardId: string, userId: string): Promise<ArchivedCard[]> {
-    await this.findOwnedBoard(this.prisma, boardId, userId);
+  async list(boardId: string, userId: string, email: string): Promise<ArchivedCard[]> {
+    await this.findAccessibleBoard(this.prisma, boardId, userId, email);
     const cards = await this.prisma.card.findMany({
       where: { boardId, archivedAt: { not: null } },
       orderBy: archiveOrder,
@@ -42,9 +43,12 @@ export class ArchiveService {
     return cards.map(toArchivedCard);
   }
 
-  async archive(id: string, userId: string): Promise<ArchivedCard> {
+  async archive(id: string, userId: string, email: string): Promise<ArchivedCard> {
     return this.prisma.$transaction(async (tx) => {
-      const card = await tx.card.findFirst({ where: { id, list: { board: { userId } } }, include: { list: true } });
+      const card = await tx.card.findFirst({
+        where: { id, list: { board: boardAccessWhere(userId, email) } },
+        include: { list: true },
+      });
       if (!card || !card.list || card.listId === null) {
         throw new NotFoundException("Card not found");
       }
@@ -60,9 +64,9 @@ export class ArchiveService {
   }
 
   /** Archives every card of the board's done list (the chosen one, else the list named Done). */
-  async archiveDone(boardId: string, userId: string): Promise<ArchivedCard[]> {
+  async archiveDone(boardId: string, userId: string, email: string): Promise<ArchivedCard[]> {
     return this.prisma.$transaction(async (tx) => {
-      const board = await this.findOwnedBoard(tx, boardId, userId);
+      const board = await this.findAccessibleBoard(tx, boardId, userId, email);
       const lists = await tx.boardList.findMany({ where: { boardId }, orderBy: { position: "asc" } });
       const doneId = insightsListIds(board, lists).done;
       if (!doneId) return [];
@@ -85,15 +89,15 @@ export class ArchiveService {
   }
 
   /** Puts an archived card at the end of a list of its board: the given one, else done, else the last list. */
-  async restore(id: string, userId: string, listId?: string): Promise<CardResponse> {
+  async restore(id: string, userId: string, email: string, listId?: string): Promise<CardResponse> {
     return this.prisma.$transaction(async (tx) => {
       const card = await tx.card.findFirst({
-        where: { id, archivedAt: { not: null }, board: { userId } },
+        where: { id, archivedAt: { not: null }, board: boardAccessWhere(userId, email) },
       });
       if (!card || card.boardId === null) {
         throw new NotFoundException("Archived card not found");
       }
-      const board = await this.findOwnedBoard(tx, card.boardId, userId);
+      const board = await this.findAccessibleBoard(tx, card.boardId, userId, email);
       const lists = await tx.boardList.findMany({ where: { boardId: board.id }, orderBy: { position: "asc" } });
 
       let targetId: string | undefined;
@@ -116,15 +120,17 @@ export class ArchiveService {
     });
   }
 
-  async remove(id: string, userId: string): Promise<void> {
-    const { count } = await this.prisma.card.deleteMany({ where: { id, archivedAt: { not: null }, board: { userId } } });
+  async remove(id: string, userId: string, email: string): Promise<void> {
+    const { count } = await this.prisma.card.deleteMany({
+      where: { id, archivedAt: { not: null }, board: boardAccessWhere(userId, email) },
+    });
     if (count === 0) {
       throw new NotFoundException("Archived card not found");
     }
   }
 
-  async empty(boardId: string, userId: string): Promise<void> {
-    await this.findOwnedBoard(this.prisma, boardId, userId);
+  async empty(boardId: string, userId: string, email: string): Promise<void> {
+    await this.findAccessibleBoard(this.prisma, boardId, userId, email);
     await this.prisma.card.deleteMany({ where: { boardId, archivedAt: { not: null } } });
   }
 }
