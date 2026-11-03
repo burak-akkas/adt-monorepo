@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../support/fixtures";
 
 test("Move completed to bottom reorders the checklist and persists", async ({ page }) => {
   await page.goto("./");

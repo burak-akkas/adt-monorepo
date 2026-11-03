@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { expect, test } from "../../support/fixtures";
 
 const select = (page: Page) => page.getByRole("combobox", { name: "Board" });
 const selected = (page: Page) => select(page).locator("option:checked");

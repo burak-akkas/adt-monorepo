@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../support/fixtures";
 
 test("shows a character count under the card description that updates as you type", async ({ page }) => {
   await page.goto("./");
