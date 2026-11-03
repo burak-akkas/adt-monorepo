@@ -264,3 +264,17 @@ class PrStillCurrentTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QueueRaceTest(unittest.TestCase):
+    def test_an_api_error_never_takes_a_queued_pr_out_of_the_queue(self) -> None:
+        # The Integrator's own update of an approved PR, and the API fails while the guard checks it:
+        # that must stop this run, not eject the PR (the Integrator may be merging it right now).
+        gh = Repo()
+        gh.add_pr(101, head=B, labels=("agent:integrating",))
+        gh.say(101, approval(A))
+        gh.commit_is(Commit(sha=B, parents=(A, C), author_id=BOT, committer_login="web-flow", verified=True))
+        gh.fail(f"commits/{B}")
+        reason = prs.still_current(gh, S, 101, B, clock=FakeClock())
+        self.assertEqual(reason, "PR is in the merge queue (couldn't check its new commits, the Integrator decides)")
+        self.assertEqual(gh.agent_labels(101), ["agent:integrating"])

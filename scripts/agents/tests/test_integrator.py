@@ -227,3 +227,13 @@ class ConfigTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RaceTest(unittest.TestCase):
+    def test_a_pr_taken_out_of_the_queue_while_its_checks_ran_is_not_merged(self) -> None:
+        q = Queue()
+        # Another run takes the PR out of the queue while the Integrator waits for the checks.
+        with q.gh._edit() as st:
+            st["hooks"] = [{"match": "pr checks 101", "pr": 101, "labels": ["agent:review"]}]
+        self.assertEqual(q.run(), "left")
+        self.assertEqual(q.gh.merged(), [])

@@ -332,6 +332,8 @@ class _Integration:
             if self.behind(head) > 0:
                 self.log(f"#{pr}: {self.base} moved while the checks (or QA) ran, updating again")
                 continue
+            # Still ours right before the merge: another run may have taken it out of the queue meanwhile.
+            self.leave_if_changed(head, "right before the merge")
             if self.merge(head):
                 self.finish("merged")
             # New commits (refused by --match-head-commit) or a closed PR: not a failed attempt.
