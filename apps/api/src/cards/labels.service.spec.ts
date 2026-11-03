@@ -25,7 +25,7 @@ describe("LabelsService", () => {
       data: { userId, name: `B${seq++}`, lists: { create: [{ name: "L", position: 0 }] } },
       include: { lists: true },
     });
-    return cards.create(board.lists[0].id, userId, { title: "Card", priority: "medium" });
+    return cards.create(board.lists[0].id, userId, userId === bob ? bobEmail : aliceEmail, { title: "Card", priority: "medium" });
   };
   const positions = async (cardId: string) =>
     (await prisma.cardLabel.findMany({ where: { cardId }, orderBy: { position: "asc" } })).map((l) => [l.name, l.position]);
@@ -63,7 +63,7 @@ describe("LabelsService", () => {
     const other = await newCard(alice);
     await service.add(card.id, alice, aliceEmail, "bug");
     await expect(service.add(card.id, alice, aliceEmail, "Bug")).rejects.toBeInstanceOf(ConflictException);
-    expect((await cards.get(card.id, alice)).labels).toEqual(["bug"]);
+    expect((await cards.get(card.id, alice, aliceEmail)).labels).toEqual(["bug"]);
     expect((await service.add(other.id, alice, aliceEmail, "Bug")).labels).toEqual(["Bug"]);
   });
 
@@ -86,6 +86,6 @@ describe("LabelsService", () => {
     await service.add(card.id, alice, aliceEmail, "mine");
     await expect(service.add(card.id, bob, bobEmail, "x")).rejects.toBeInstanceOf(NotFoundException);
     await expect(service.remove(card.id, bob, bobEmail, "mine")).rejects.toBeInstanceOf(NotFoundException);
-    expect((await cards.get(card.id, alice)).labels).toEqual(["mine"]);
+    expect((await cards.get(card.id, alice, aliceEmail)).labels).toEqual(["mine"]);
   });
 });

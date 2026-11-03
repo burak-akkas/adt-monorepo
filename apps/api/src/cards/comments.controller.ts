@@ -6,7 +6,7 @@ import {
   type CardResponse,
   type EditCommentRequest,
 } from "@adt/contracts";
-import { SessionGuard, UserId } from "../auth/session.guard.js";
+import { SessionGuard, UserEmail, UserId } from "../auth/session.guard.js";
 import { ZodValidationPipe } from "../common/zod-validation.pipe.js";
 import { CommentsService } from "./comments.service.js";
 
@@ -18,28 +18,31 @@ export class CommentsController {
   @Post()
   add(
     @UserId() userId: string,
+    @UserEmail() email: string,
     @Param("cardId") cardId: string,
     @Body(new ZodValidationPipe(addCommentRequestSchema)) body: AddCommentRequest,
   ): Promise<CardResponse> {
-    return this.comments.add(cardId, userId, body.text);
+    return this.comments.add(cardId, userId, email, body.text);
   }
 
   @Patch(":commentId")
   edit(
     @UserId() userId: string,
+    @UserEmail() email: string,
     @Param("cardId") cardId: string,
     @Param("commentId") commentId: string,
     @Body(new ZodValidationPipe(editCommentRequestSchema)) body: EditCommentRequest,
   ): Promise<CardResponse> {
-    return this.comments.edit(cardId, commentId, userId, body.text);
+    return this.comments.edit(cardId, commentId, userId, email, body.text);
   }
 
   @Delete(":commentId")
   remove(
     @UserId() userId: string,
+    @UserEmail() email: string,
     @Param("cardId") cardId: string,
     @Param("commentId") commentId: string,
   ): Promise<CardResponse> {
-    return this.comments.remove(cardId, commentId, userId);
+    return this.comments.remove(cardId, commentId, userId, email);
   }
 }
