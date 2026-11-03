@@ -7,6 +7,11 @@ import { resetBoardStore } from "@/hooks/useBoard";
 import { Board } from "@/components/board/Board";
 import { TopBar } from "@/components/app/TopBar";
 
+// Keep the real better-auth session client (and its timers) out of these board tests.
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({ status: "anonymous", user: null, logout: vi.fn() }),
+}));
+
 // Column titles in board order (without the card count badge).
 const headings = () =>
   Array.from(document.querySelectorAll('h2[id^="column-"]')).map((h) => h.firstChild?.textContent?.trim());
