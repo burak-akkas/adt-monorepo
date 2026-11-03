@@ -1,4 +1,12 @@
-import { importBoardResponseSchema, type ImportBoardRequest, type ImportBoardResponse } from "@adt/contracts";
+import {
+  boardMembersResponseSchema,
+  importBoardResponseSchema,
+  memberSchema,
+  type BoardMembersResponse,
+  type ImportBoardRequest,
+  type ImportBoardResponse,
+  type Member,
+} from "@adt/contracts";
 import type { ZodType } from "zod";
 
 // The browser only talks to its own origin; Next.js forwards /api/... to the API (and adds the internal key).
@@ -131,4 +139,19 @@ export async function apiRequest<T = undefined>(path: string, options: ApiReques
 // Idempotent: the same importKey returns the board created the first time (`created: false`).
 export function importBoard(request: ImportBoardRequest, signal?: AbortSignal): Promise<ImportBoardResponse> {
   return apiRequest("/boards/import", { method: "POST", body: request, schema: importBoardResponseSchema, signal });
+}
+
+const membersPath = (boardId: string) => `/boards/${encodeURIComponent(boardId)}/members`;
+
+export function listMembers(boardId: string, signal?: AbortSignal): Promise<BoardMembersResponse> {
+  return apiRequest(membersPath(boardId), { schema: boardMembersResponseSchema, signal });
+}
+
+// Gives the person with this email access. No email is sent. 400: invalid or the owner's own email; 409: already invited.
+export function inviteMember(boardId: string, email: string, signal?: AbortSignal): Promise<Member> {
+  return apiRequest(membersPath(boardId), { method: "POST", body: { email }, schema: memberSchema, signal });
+}
+
+export function removeMember(boardId: string, memberId: string, signal?: AbortSignal): Promise<void> {
+  return apiRequest(`${membersPath(boardId)}/${encodeURIComponent(memberId)}`, { method: "DELETE", signal });
 }

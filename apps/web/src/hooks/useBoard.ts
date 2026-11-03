@@ -7,7 +7,8 @@ import { resetServerBoardStore, useServerBoard, useServerBoards, useServerSaveEr
 // The public surface over the boards stored on the server.
 
 export interface BoardsApi {
-  boards: { id: string; name: string }[];
+  // `role` is absent for a board the user owns.
+  boards: { id: string; name: string; role?: "owner" | "editor" }[];
   currentId: string;
   // False while the boards are loading from the server.
   ready: boolean;
@@ -15,6 +16,8 @@ export interface BoardsApi {
   renameBoard: (id: string, name: string) => NameResult;
   duplicateBoard: () => void;
   deleteBoard: (id: string) => void;
+  // For a board shared with the user: they stop having access.
+  leaveBoard: (id: string) => void;
   selectBoard: (id: string) => void;
   // Adds the board as a new one.
   importBoardFile?: (board: Board, name: string) => void;

@@ -20,9 +20,10 @@ import {
 } from "@/lib/board";
 import { useBoard, useBoards } from "@/hooks/useBoard";
 
+import { ShareDialog } from "@/components/app/ShareDialog";
 import { Button, ConfirmDialog, Dialog, Input, Menu, MoreIcon, Select } from "@/components/ui";
 
-type Dialogs = "create" | "rename" | "delete" | "archive" | "empty" | null;
+type Dialogs = "create" | "rename" | "delete" | "archive" | "empty" | "share" | "leave" | null;
 
 function BoardNameDialog({
   title,
@@ -89,7 +90,7 @@ function BoardNameDialog({
 }
 
 export function BoardSwitcher() {
-  const { boards, currentId, createBoard, renameBoard, duplicateBoard, deleteBoard, selectBoard } = useBoards();
+  const { boards, currentId, createBoard, renameBoard, duplicateBoard, deleteBoard, leaveBoard, selectBoard } = useBoards();
   const [board, update] = useBoard();
   const lists = boardLists(board);
   const [dialog, setDialog] = useState<Dialogs>(null);
@@ -111,6 +112,15 @@ export function BoardSwitcher() {
   const doneId = insightsListIds(board).done;
   const doneCount = doneId === undefined ? 0 : listCards(board, doneId).length;
   const archivedCount = board.archive.length;
+  // An absent role means the user owns the board.
+  const isEditor = current.role === "editor";
+  const myBoards = boards.filter((b) => b.role !== "editor");
+  const sharedBoards = boards.filter((b) => b.role === "editor");
+  const option = (b: (typeof boards)[number]) => (
+    <option key={b.id} value={b.id}>
+      {b.name}
+    </option>
+  );
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -120,22 +130,28 @@ export function BoardSwitcher() {
         onChange={(event) => selectBoard(event.target.value)}
         className="max-w-full min-w-0"
       >
-        {boards.map((b) => (
-          <option key={b.id} value={b.id}>
-            {b.name}
-          </option>
-        ))}
+        {sharedBoards.length === 0 ? (
+          boards.map(option)
+        ) : (
+          <>
+            <optgroup label="My boards">{myBoards.map(option)}</optgroup>
+            <optgroup label="Shared with me">{sharedBoards.map(option)}</optgroup>
+          </>
+        )}
       </Select>
       <Menu
         label="Board actions"
         icon={<MoreIcon />}
         items={[
           { label: "New board", onSelect: () => setDialog("create") },
-          { label: "Rename board", onSelect: () => setDialog("rename") },
+          ...(isEditor ? [] : [{ label: "Share board", onSelect: () => setDialog("share") }]),
+          ...(isEditor ? [] : [{ label: "Rename board", onSelect: () => setDialog("rename") }]),
           { label: "Duplicate board", onSelect: duplicateBoard },
           { label: "Copy board link", onSelect: copyLink },
           { label: "Copy as Markdown", onSelect: copyMarkdown },
-          { label: "Delete board", disabled: boards.length <= 1, onSelect: () => setDialog("delete") },
+          ...(isEditor
+            ? [{ label: "Leave board", onSelect: () => setDialog("leave") }]
+            : [{ label: "Delete board", disabled: boards.length <= 1, onSelect: () => setDialog("delete") }]),
           {
             label: "Collapse all lists",
             disabled: lists.length === 0 || lists.every((l) => isListCollapsed(board, l.id)),
@@ -188,6 +204,19 @@ export function BoardSwitcher() {
           confirmLabel="Delete"
           onConfirm={() => {
             update(emptyArchive);
+            close();
+          }}
+          onCancel={close}
+        />
+      )}
+      {dialog === "share" && !isEditor && <ShareDialog boardId={current.id} boardName={current.name} onClose={close} />}
+      {dialog === "leave" && isEditor && (
+        <ConfirmDialog
+          title="Leave board"
+          message={<>Leave &ldquo;{current.name}&rdquo;? You will lose access until the owner shares it with you again.</>}
+          confirmLabel="Leave"
+          onConfirm={() => {
+            leaveBoard(current.id);
             close();
           }}
           onCancel={close}

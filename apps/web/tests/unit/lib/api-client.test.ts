@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { ApiError, apiRequest, importBoard } from "@/lib/api-client";
+import { ApiError, apiRequest, importBoard, inviteMember, listMembers, removeMember } from "@/lib/api-client";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -114,5 +114,50 @@ describe("importBoard", () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/boards/import");
     expect(init.method).toBe("POST");
+  });
+});
+
+describe("members calls", () => {
+  it("lists the owner and the members", async () => {
+    const body = { owner: { email: "o@example.test" }, members: [{ id: "m1", email: "x@example.test" }] };
+    const fetchMock = stubFetch(json(body));
+    await expect(listMembers("b 1")).resolves.toEqual(body);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/boards/b%201/members");
+    expect(init.method).toBe("GET");
+  });
+
+  it("rejects a list in an unexpected shape", async () => {
+    stubFetch(json({ nope: true }));
+    await expect(listMembers("b1")).rejects.toMatchObject({ kind: "invalid-response" });
+  });
+
+  it("invites by email", async () => {
+    const fetchMock = stubFetch(json({ id: "m1", email: "x@example.test" }, 201));
+    await expect(inviteMember("b1", "x@example.test")).resolves.toEqual({ id: "m1", email: "x@example.test" });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/boards/b1/members");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(JSON.stringify({ email: "x@example.test" }));
+  });
+
+  it("maps 400 and 409 on invite", async () => {
+    stubFetch(json({ message: "You already own this board" }, 400));
+    await expect(inviteMember("b1", "o@example.test")).rejects.toMatchObject({ kind: "validation", message: "You already own this board" });
+    stubFetch(json({ message: "Already invited" }, 409));
+    await expect(inviteMember("b1", "x@example.test")).rejects.toMatchObject({ kind: "conflict", message: "Already invited" });
+  });
+
+  it("removes a member", async () => {
+    const fetchMock = stubFetch(new Response(null, { status: 204 }));
+    await expect(removeMember("b1", "m 1")).resolves.toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/boards/b1/members/m%201");
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("maps 404 on remove", async () => {
+    stubFetch(json({ message: "Member not found" }, 404));
+    await expect(removeMember("b1", "m1")).rejects.toMatchObject({ kind: "not-found" });
   });
 });
