@@ -6,17 +6,12 @@ const { signUp, signIn, push, state } = vi.hoisted(() => ({
   signUp: vi.fn(),
   signIn: vi.fn(),
   push: vi.fn(),
-  state: { next: null as string | null, enabled: false },
+  state: { next: null as string | null },
 }));
 vi.mock("@/lib/auth-client", () => ({ authClient: { signUp: { email: signUp }, signIn: { email: signIn } } }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push }),
   useSearchParams: () => new URLSearchParams(state.next === null ? "" : { next: state.next }),
-}));
-vi.mock("@/lib/config", () => ({
-  get USE_SERVER_BOARDS() {
-    return state.enabled;
-  },
 }));
 
 import { AuthForm } from "@/components/app/AuthForm";
@@ -26,7 +21,6 @@ beforeEach(() => {
   signIn.mockReset();
   push.mockReset();
   state.next = null;
-  state.enabled = false;
 });
 
 async function fill(email: string, password: string) {
@@ -128,8 +122,7 @@ describe("AuthForm", () => {
     it.each([
       ["login", signIn, "Log in"],
       ["register", signUp, "Register"],
-    ] as const)("goes to next after %s when server boards are on", async (mode, call, button) => {
-      state.enabled = true;
+    ] as const)("goes to next after %s", async (mode, call, button) => {
       state.next = "/?board=x";
       call.mockResolvedValue({ data: {}, error: null });
       render(<AuthForm mode={mode} />);
@@ -139,7 +132,6 @@ describe("AuthForm", () => {
     });
 
     it.each(["//evil.com", "https://evil.com", "/\\evil"])("ignores the unsafe next %s", async (bad) => {
-      state.enabled = true;
       state.next = bad;
       signIn.mockResolvedValue({ data: {}, error: null });
       render(<AuthForm mode="login" />);
@@ -148,24 +140,13 @@ describe("AuthForm", () => {
       await waitFor(() => expect(push).toHaveBeenCalledWith("/"));
     });
 
-    it("always goes to / when server boards are off", async () => {
-      state.next = "/a";
-      signIn.mockResolvedValue({ data: {}, error: null });
-      render(<AuthForm mode="login" />);
-      const user = await fill("a@example.test", "test-password-123");
-      await user.click(screen.getByRole("button", { name: "Log in" }));
-      await waitFor(() => expect(push).toHaveBeenCalledWith("/"));
-    });
-
     it("keeps a safe next on the cross-link", () => {
-      state.enabled = true;
       state.next = "/a?b=c";
       render(<AuthForm mode="login" />);
       expect(screen.getByRole("link", { name: "Register" })).toHaveAttribute("href", "/register?next=%2Fa%3Fb%3Dc");
     });
 
     it("drops an unsafe next from the cross-link", () => {
-      state.enabled = true;
       state.next = "//evil.com";
       render(<AuthForm mode="login" />);
       expect(screen.getByRole("link", { name: "Register" })).toHaveAttribute("href", "/register");

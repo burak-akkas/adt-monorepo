@@ -1,6 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
-import { afterEach } from "vitest";
+import { afterEach, vi } from "vitest";
+
+// Component tests run against boards kept in localStorage, not the API. A test of the real store
+// opts out with vi.unmock("@/hooks/serverBoardStore").
+vi.mock("@/hooks/serverBoardStore", () => import("./fakeBoardStore"));
 
 // Node >= 25 ships an experimental global `localStorage` that shadows jsdom's and
 // is unusable without --localstorage-file. Use an in-memory Storage in that case.

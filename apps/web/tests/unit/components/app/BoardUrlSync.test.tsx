@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BoardSwitcher } from "@/components/app/BoardSwitcher";
 import { BoardUrlSync } from "@/components/app/BoardUrlSync";
 import { createBoardEntry, initialBoardList } from "@/lib/boards";
-import { saveBoards } from "@/lib/storage";
+import { saveBoards } from "../../../support/testStorage";
 import { resetBoardStore } from "@/hooks/useBoard";
 
 const select = () => screen.getByRole("combobox", { name: "Board" });

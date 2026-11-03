@@ -4,7 +4,7 @@ import { ApiError } from "@/lib/api-client";
 import { addCard, archiveCard, renameCard, undoArchive, type Board } from "@/lib/board";
 import { resetBoardStore, useBoard, useBoards, useSaveError } from "@/hooks/useBoard";
 
-vi.mock("@/lib/config", () => ({ USE_SERVER_BOARDS: true }));
+vi.unmock("@/hooks/serverBoardStore");
 vi.mock("@/lib/api-client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api-client")>()),
   apiRequest: vi.fn(),

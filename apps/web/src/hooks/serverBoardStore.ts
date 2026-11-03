@@ -298,6 +298,18 @@ function importBoardFile(board: Board, name: string) {
   });
 }
 
+// Reads the list again, e.g. after boards were imported from this browser.
+export async function refreshBoards() {
+  if (!started) {
+    return;
+  }
+  try {
+    await loadAll(state.currentId);
+  } catch (error) {
+    setState({ status: "error", error: `${RELOAD_ERROR} ${messageOf(error)}` });
+  }
+}
+
 function dismissError() {
   setState({ error: null });
 }

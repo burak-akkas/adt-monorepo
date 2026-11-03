@@ -4,15 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   replace: vi.fn(),
   status: "loading" as "loading" | "anonymous" | "authenticated",
-  enabled: true,
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: mocks.replace }), usePathname: () => "/" }));
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ status: mocks.status, user: null, logout: vi.fn() }) }));
-vi.mock("@/lib/config", () => ({
-  get USE_SERVER_BOARDS() {
-    return mocks.enabled;
-  },
-}));
 
 import { AuthGate } from "@/components/app/AuthGate";
 import { UNAUTHORIZED_EVENT } from "@/lib/api-client";
@@ -20,7 +14,6 @@ import { UNAUTHORIZED_EVENT } from "@/lib/api-client";
 beforeEach(() => {
   mocks.replace.mockReset();
   mocks.status = "loading";
-  mocks.enabled = true;
   window.history.replaceState(null, "", "/");
 });
 
@@ -59,16 +52,5 @@ describe("AuthGate", () => {
       window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
     });
     expect(mocks.replace).toHaveBeenCalledWith("/login?next=%2F");
-  });
-
-  it("does nothing when server boards are off", () => {
-    mocks.enabled = false;
-    mocks.status = "anonymous";
-    render(gate());
-    act(() => {
-      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
-    });
-    expect(screen.getByText("board")).toBeInTheDocument();
-    expect(mocks.replace).not.toHaveBeenCalled();
   });
 });

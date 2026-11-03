@@ -61,9 +61,18 @@ describe("useLocalImport", () => {
     const { result } = renderHook(() => useLocalImport({ email: "a@example.test" }));
     await waitFor(() => expect(result.current.state).toMatchObject({ phase: "done", failed }));
     importLocalBoards.mockResolvedValueOnce({ status: "done", imported: 1, alreadyImported: 0, failed: [] });
-    act(() => result.current.retry());
+    await act(async () => {
+      await result.current.retry();
+    });
     await waitFor(() => expect(result.current.state).toMatchObject({ phase: "done", imported: 2, failed: [] }));
     expect(importLocalBoards).toHaveBeenCalledTimes(2);
+    expect(result.current.settled).toBe(true);
+  });
+
+  it("is settled at once when there is nothing to import", async () => {
+    const { result } = renderHook(() => useLocalImport({ email: "a@example.test" }));
+    await waitFor(() => expect(result.current.settled).toBe(true));
+    expect(importLocalBoards).not.toHaveBeenCalled();
   });
 
   it("dismiss hides the banner and leaves storage alone", async () => {

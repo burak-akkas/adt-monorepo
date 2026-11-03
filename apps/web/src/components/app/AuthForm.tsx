@@ -7,7 +7,6 @@ import { useState, type FormEvent } from "react";
 import { Button, Input } from "@/components/ui";
 import { authClient } from "@/lib/auth-client";
 import { GENERIC_ERROR, authErrorMessage, validateAuthForm, type AuthMode } from "@/lib/authErrors";
-import { USE_SERVER_BOARDS } from "@/lib/config";
 import { safeNextPath } from "@/lib/nextPath";
 
 export function AuthForm({ mode }: { mode: AuthMode }) {
@@ -19,7 +18,7 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
   const [submitting, setSubmitting] = useState(false);
   const isRegister = mode === "register";
   const safeNext = safeNextPath(next);
-  const linkSuffix = USE_SERVER_BOARDS && safeNext !== "/" ? `?next=${encodeURIComponent(safeNext)}` : "";
+  const linkSuffix = safeNext !== "/" ? `?next=${encodeURIComponent(safeNext)}` : "";
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -46,7 +45,7 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
         setError(authErrorMessage(mode, apiError, retryAfter));
         return;
       }
-      router.push(USE_SERVER_BOARDS ? safeNextPath(next) : "/");
+      router.push(safeNext);
     } catch {
       setError(GENERIC_ERROR);
     } finally {

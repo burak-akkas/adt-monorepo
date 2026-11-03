@@ -7,11 +7,10 @@ import {
   LEGACY_STORAGE_KEY,
   loadBoards,
   parseBoard,
-  saveBoards,
   serializeBoard,
   STORAGE_KEY,
 } from "@/lib/storage";
-import { loadBoard, saveBoard } from "../../support/testStorage";
+import { loadBoard, saveBoard, saveBoards } from "../../support/testStorage";
 
 describe("board list storage", () => {
   const legacyBoard = () => {
@@ -225,7 +224,6 @@ describe("storage", () => {
 
   it("works without storage", () => {
     expect(loadBoards(undefined).boards[0].board).toEqual(emptyBoard());
-    expect(() => saveBoards(initialBoardList(), undefined)).not.toThrow();
   });
 });
 
