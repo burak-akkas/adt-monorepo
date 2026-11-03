@@ -19,6 +19,7 @@ describe("sharing: cards, checklist and comments", () => {
   let app: NestExpressApplication;
   let prisma: PrismaService;
   const cookies: Record<"a" | "b" | "c", string> = { a: "", b: "", c: "" };
+  let boards = 0;
 
   const signUp = async (name: string) => {
     const res = await request(app.getHttpServer())
@@ -43,7 +44,8 @@ describe("sharing: cards, checklist and comments", () => {
   /** Owner A's board with two lists and one card (a checklist item and a comment), B invited as editor. */
   const shared = async () => {
     const a = as("a");
-    const boardId = (await a.post("/boards", { name: "Shared" }).expect(201)).body.id as string;
+    // Board names are unique per user, so each call needs its own.
+    const boardId = (await a.post("/boards", { name: `Shared ${++boards}` }).expect(201)).body.id as string;
     // Invite with different casing: access is matched lower-cased.
     await a.post(`/boards/${boardId}/members`, { email: email("bo").toUpperCase() }).expect(201);
     const todo = (await a.post(`/boards/${boardId}/lists`, { name: "Todo" }).expect(201)).body.id as string;
