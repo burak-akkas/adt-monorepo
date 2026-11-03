@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../support/fixtures";
 
 test("a list header shows the full list name as a tooltip", async ({ page }) => {
   await page.goto("./");

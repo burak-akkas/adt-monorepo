@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../support/fixtures";
 import { moveCardTo } from "../../support/cardActions";
 
 async function addCard(page: import("@playwright/test").Page, title: string) {

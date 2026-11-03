@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../support/fixtures";
 
 test("Settings shows the app version line", async ({ page }) => {
   await page.goto("./");
