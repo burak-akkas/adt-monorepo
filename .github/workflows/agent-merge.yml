@@ -6,7 +6,9 @@ name: "Agent · Merge"
 #   2. Approval: an agent approval must name the PR's head commit (agent.sh approve), else back to review.
 #      A human applying the label approves the head as it is
 #   3. Risk: if the linked issue is `risk:high`, a human merges (unless AGENT_AUTO_MERGE_HIGH_RISK == 'true').
-#      So does any PR touching AGENT_PROTECTED_PATHS (default .github/, scripts/, templates/)
+#      So does any PR touching AGENT_PROTECTED_PATHS (default .github/, scripts/, templates/). These join
+#      the queue too: the Integrator tests them like any other PR (update, checks, QA), then hands them to
+#      a human (`agent:needs-human`) naming the tested commit, instead of merging
 #   4. Queue: labels the PR `agent:queued` and posts its place in the queue. The Integrator
 #      (agent-integrator.yml) merges queued PRs one at a time: it brings each one up to date with the
 #      base right before merging, waits for the required checks on exactly that commit, and merges it.

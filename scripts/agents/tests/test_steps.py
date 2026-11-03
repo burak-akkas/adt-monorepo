@@ -79,6 +79,22 @@ class ChecksTest(unittest.TestCase):
         self.assertEqual(prs.evaluate_checks([c("Lint", "pass")], "CI"), ("none", ""))
 
 
+class MergeGateTest(unittest.TestCase):
+    def test_high_risk_and_protected_prs_join_the_queue_too(self) -> None:
+        # The Integrator tests them like any other (update, checks, QA) and hands them to a human to merge.
+        for issue_labels, files in ((("agent:pr-open", "risk:high"), ("src/a.ts",)), (("agent:pr-open",), ("scripts/x.sh",))):
+            gh = Repo()
+            gh.add_issue(11, labels=issue_labels)
+            gh.add_pr(101, labels=("agent:approved",), files=files, issue=11)
+            head = gh.head(101)
+            gh.say(101, f"<!-- agent:reviewer -->\n**Verdict:** approve\n<!-- agent:approved-sha {head} -->")
+            io = step.StepIO()
+            review.merge_risk_gate(gh, S, io, 101, head=head, by=review.Approval("Bot", "bot"))
+            self.assertNotIn("stop", io.outputs)
+            self.assertEqual(gh.agent_labels(101), ["agent:approved"])
+            self.assertTrue(any("a human merges it once the queue has tested it" in line for line in io.log + io.summary), io.log + io.summary)
+
+
 class DesignTest(unittest.TestCase):
     def test_planned_files(self) -> None:
         self.assertEqual(roles.planned({"files": ["./b.ts", "a.ts", "", 3, "a.ts"]}), ["a.ts", "b.ts"])

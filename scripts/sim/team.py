@@ -519,8 +519,12 @@ class Team:
             if it.get("kind", "pr") != "pr":
                 continue
             labs = it.get("labels", [])
+            human_merges = "risk:high" in st["items"].get(str(it.get("issue")), {}).get("labels", []) or \
+                any(f["filename"].startswith((".github/", "scripts/", "templates/")) for f in st["shas"][it["head"]]["files"])
             if it.get("state") == "MERGED":
                 result[n] = "merged"
+                if human_merges and not self.legacy:   # nobody merges these by hand in this world: the agents did
+                    violations.append({"kind": "agents-merged-what-a-human-merges", "pr": int(n)})
                 stale = [l for l in labs if l.startswith("agent:") and l != "agent:done"]
                 if stale and not self.legacy:
                     violations.append({"kind": "merged-pr-with-state", "pr": int(n), "labels": stale})
@@ -529,7 +533,10 @@ class Team:
             elif it.get("draft"):
                 result[n] = "draft"
             elif "agent:needs-human" in labs:
-                result[n] = "needs-human"
+                bodies = [c["body"] for c in st["comments_all"] if c["id"] in it.get("comments", [])]
+                last = next((b for b in reversed(bodies) if "<!-- agent:" in b), "")
+                # Handed over by the queue, tested and ready for a human to merge (the fake audits that), or escalated.
+                result[n] = "handed" if "<!-- agent:ready-to-merge " in last and human_merges else "needs-human"
             else:
                 result[n] = ("LIVELOCK " if outcome == "LIVELOCK" else "STUCK ") + ",".join(labs)
             if len(it.get("comments", [])) > 80:

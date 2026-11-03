@@ -309,9 +309,9 @@ def merge_gate():
     a, b = sha(0xa1), sha(0xa2)
     for pr, sender, extra in (({"head": a, "comments": [approval(a)]}, "Bot", {}), ({"head": b, "comments": [approval(a)]}, "Bot", {}),
                               ({"head": b, "comments": []}, "User", {}), ({"head": a, "state": "MERGED", "comments": [approval(a)]}, "Bot", {}),
-                              ({"head": a, "comments": [approval(a)], "files": files("+x", name="scripts/x.sh")}, "Bot", {}),
-                              ({"head": a, "comments": [approval(a)], "high": True}, "Bot", {}),
                               ({"head": a, "comments": [approval(a)], "high": True}, "Bot", {"HIGH_RISK_OK": "true"})):
+        # Changed since: high-risk PRs and PRs touching protected paths now join the queue too, and the
+        # Integrator hands them to a human once tested (tests/test_steps.py MergeGateTest, test_integrator.py).
         pr = dict(pr, labels=["agent:approved"], issue=11)
         high = pr.pop("high", False)
         st = make_state({101: pr, 102: {"head": sha(0xb1), "comments": [queued()]}})

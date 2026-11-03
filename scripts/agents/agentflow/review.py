@@ -353,7 +353,8 @@ class Approval:
 
 
 def merge_risk_gate(gh: GitHub, s: Settings, io: StepIO, pr: int, *, head: str, by: Approval) -> None:
-    """May this approved PR join the merge queue without a human?"""
+    """May this approved PR join the merge queue? Any open PR still at its approved commit may: high-risk
+    ones too, which the Integrator tests and then hands to a human instead of merging."""
     view = gh.pr(pr)
     state = view.state + (" draft" if view.is_draft else "")
     if state != "OPEN":  # the approval may arrive late (a redelivered event, a human label)
@@ -378,18 +379,12 @@ def merge_risk_gate(gh: GitHub, s: Settings, io: StepIO, pr: int, *, head: str, 
     risk = next((label.removeprefix("risk:") for label in gh.labels(issue) if label.startswith("risk:")), "unknown") if issue else "unknown"
     io.output(issue=issue or "")
     io.note(f"Linked issue: {issue or 'none'}, risk: {risk}")
-    if risk == "high" and not by.high_risk_ok:
-        move(gh, s, io, pr, "agent:needs-human")
-        gh.comment(pr, "✋ Approved by the agents, but the change is **high risk**, so a human merges it.")
-        io.output(stop="true")
-        return
-    # The team's own tooling (prompts, scripts, templates) is never changed without a human.
+    # High risk, or the team's own tooling (prompts, scripts, templates): a human merges, but only after the
+    # queue has tested it like any other PR (update, checks, QA). The Integrator hands it over then.
     touched = [f for f in gh.pr_files(pr) if f.startswith(by.protected)]
-    if touched:
-        move(gh, s, io, pr, "agent:needs-human")
-        listing = "\n".join(f"- `{f}`" for f in touched)
-        gh.comment(pr, f"✋ Approved by the agents, but it changes the agent team's own tooling, so a human merges it:\n{listing}")
-        io.output(stop="true")
+    if (risk == "high" and not by.high_risk_ok) or touched:
+        why = "it is high risk" if risk == "high" and not by.high_risk_ok else "it changes the agent team's own tooling"
+        io.note(f"Joins the queue, but {why}: a human merges it once the queue has tested it")
 
 
 def merge_join(gh: GitHub, s: Settings, io: StepIO, pr: int, *, head: str, base: str, sender_type: str) -> None:

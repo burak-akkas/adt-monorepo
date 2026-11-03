@@ -14,7 +14,7 @@ import argparse, collections, concurrent.futures, json, os, subprocess, sys, tim
 
 SIM = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(SIM))
-TERMINAL = ("merged", "closed", "draft", "needs-human")
+TERMINAL = ("merged", "handed", "closed", "draft", "needs-human")
 
 
 def run_one(name, prof, seed, sequential):
@@ -88,8 +88,8 @@ def main():
                 for r in rs:
                     fh.write(json.dumps(r) + "\n")
 
-    lines = ["| Profile | Runs | PRs | Merged | Escalated to a human | Closed / draft (by a human) | **Stuck** | **Violations** | **Unexpected failures** | Reviews / merged PR | QA / merged PR | Implementor / merged PR | Branch updates / merged PR | Lead runs | Wasted Implementor runs (no-change) | Watchdog queue restarts | Human-merge races | Injected trouble |",
-             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    lines = ["| Profile | Runs | PRs | Merged | Tested, handed to a human to merge | Escalated to a human | Closed / draft (by a human) | **Stuck** | **Violations** | **Unexpected failures** | Reviews / merged PR | QA / merged PR | Implementor / merged PR | Branch updates / merged PR | Lead runs | Wasted Implementor runs (no-change) | Watchdog queue restarts | Human-merge races | Injected trouble |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     problems = []
     for name in profiles:
         rs = results[name]
@@ -102,8 +102,8 @@ def main():
         races = sum(1 for r in ok for v in r["violations"] if v["kind"] == "human-merge-race")
         unexp = sum(len(r["unexpected_failures"]) for r in ok) + (len(rs) - len(ok))
         trouble = ", ".join("%s %d" % (k, s(k)) for k in ("lost_webhooks", "duplicated", "dropped_pending", "api_flakes", "killed", "human_actions") if s(k))
-        lines.append("| %s | %d | %d | %d | %d | %d | %s | %s | %s | %.2f | %.2f | %.2f | %.2f | %d | %d | %d | %d | %s |" % (
-            name, len(rs), sum(len(r["result"]) for r in ok), c["merged"], c["needs-human"], c["closed"] + c["draft"],
+        lines.append("| %s | %d | %d | %d | %d | %d | %d | %s | %s | %s | %.2f | %.2f | %.2f | %.2f | %d | %d | %d | %d | %s |" % (
+            name, len(rs), sum(len(r["result"]) for r in ok), c["merged"], c["handed"], c["needs-human"], c["closed"] + c["draft"],
             "**%d**" % stuck if stuck else "0", "**%d**" % viol if viol else "0", "**%d**" % unexp if unexp else "0",
             s("reviews") / merged, s("qa") / merged, s("impl") / merged, s("updates") / merged, s("lead"), s("impl_nochange"), s("watchdog_kicks"), races, trouble or "–"))
         for r in rs:
