@@ -15,7 +15,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
-from agentflow.model import Comment, Issue, LabelEvent
+from agentflow.model import Comment, Commit, FileChange, Issue, LabelEvent, PullRequest
 
 Runner = Callable[[list[str], "str | None"], str]
 
@@ -74,6 +74,41 @@ class GitHub(ABC):
     def pr_closing_issue(self, pr: int) -> int | None:
         """The issue a PR closes (its first closing reference), if any."""
 
+    # --- pull requests and code ------------------------------------------------------------------
+    @abstractmethod
+    def pr(self, number: int) -> PullRequest: ...
+
+    @abstractmethod
+    def pr_mergeable(self, number: int) -> str:
+        """MERGEABLE, CONFLICTING or UNKNOWN (GitHub computes it lazily: retry UNKNOWN)."""
+
+    @abstractmethod
+    def prs(self, state: str = "open", label: str | None = None, base: str | None = None) -> list[PullRequest]:
+        """Pull requests by state ("open" or "all"), optionally with a label or a base branch."""
+
+    @abstractmethod
+    def pr_files(self, number: int) -> list[str]:
+        """The files a PR changes."""
+
+    @abstractmethod
+    def compare_files(self, base: str, head: str) -> list[FileChange]:
+        """The changes of base...head (from their merge base, like a PR's diff)."""
+
+    @abstractmethod
+    def compare_status(self, a: str, b: str) -> str:
+        """How b relates to a: identical, ahead, behind or diverged."""
+
+    @abstractmethod
+    def commit(self, sha: str) -> Commit: ...
+
+    @abstractmethod
+    def open_items(self) -> list[Issue]:
+        """Every open issue and PR (PRs with is_draft set)."""
+
+    @abstractmethod
+    def run_titles(self, workflow: str, status: str) -> list[str]:
+        """Titles of a workflow's runs in a status (queued, in_progress, …); run titles are the item's title."""
+
 
 def run_gh(args: list[str], stdin: str | None = None) -> str:
     try:
@@ -95,7 +130,8 @@ def _issue(data: dict[str, Any]) -> Issue:
         state_reason=data.get("state_reason"),
         author_id=int((data.get("user") or {}).get("id") or 0),
         labels=tuple(label["name"] for label in data.get("labels") or []),
-        is_pr=bool(data.get("pull_request")),
+        is_pr=data.get("pull_request") is not None,  # GitHub sends an object for PRs; any object, even {}, means a PR
+        is_draft=bool(data.get("draft")),
     )
 
 
@@ -184,3 +220,71 @@ class GhCli(GitHub):
 
     def create_label(self, name: str, color: str, description: str) -> None:
         self._run(["label", "create", name, "-R", self.repo, "--color", color, "--description", description, "--force"], None)
+
+    # --- pull requests and code ------------------------------------------------------------------
+    PR_FIELDS = "number,state,isDraft,headRefOid,headRefName,baseRefName,labels,title"
+
+    @staticmethod
+    def _pull(d: dict[str, Any]) -> PullRequest:
+        return PullRequest(
+            number=int(d["number"]),
+            state=d.get("state") or "OPEN",
+            is_draft=bool(d.get("isDraft")),
+            head_sha=d.get("headRefOid") or "",
+            head_ref=d.get("headRefName") or "",
+            base_ref=d.get("baseRefName") or "",
+            labels=tuple(label["name"] for label in d.get("labels") or []),
+            title=d.get("title") or "",
+        )
+
+    def pr(self, number: int) -> PullRequest:
+        return self._pull(self._json(["pr", "view", str(number), "-R", self.repo, "--json", self.PR_FIELDS]))
+
+    def pr_mergeable(self, number: int) -> str:
+        return str((self._json(["pr", "view", str(number), "-R", self.repo, "--json", "mergeable"]) or {}).get("mergeable") or "UNKNOWN")
+
+    def prs(self, state: str = "open", label: str | None = None, base: str | None = None) -> list[PullRequest]:
+        args = ["pr", "list", "-R", self.repo, "--state", state, "--limit", "100", "--json", self.PR_FIELDS]
+        if label:
+            args += ["--label", label]
+        if base:
+            args += ["--base", base]
+        return [self._pull(d) for d in self._json(args) or []]
+
+    def pr_files(self, number: int) -> list[str]:
+        return [f["filename"] for f in self._pages(self._path("pulls", number, "files") + "?per_page=100")]
+
+    def _compare(self, a: str, b: str) -> dict[str, Any]:
+        return dict(self._json(["api", self._path("compare", f"{a}...{b}")]) or {})
+
+    def compare_files(self, base: str, head: str) -> list[FileChange]:
+        return [
+            FileChange(
+                filename=f["filename"],
+                status=f.get("status") or "",
+                patch=f.get("patch"),
+                previous_filename=f.get("previous_filename"),
+                changes=int(f.get("changes") or 0),
+            )
+            for f in self._compare(base, head).get("files") or []
+        ]
+
+    def compare_status(self, a: str, b: str) -> str:
+        return str(self._compare(a, b).get("status") or "")
+
+    def commit(self, sha: str) -> Commit:
+        d = self._json(["api", self._path("commits", sha)]) or {}
+        return Commit(
+            sha=sha,
+            parents=tuple(p["sha"] for p in d.get("parents") or []),
+            author_id=(d.get("author") or {}).get("id"),
+            committer_login=(d.get("committer") or {}).get("login"),
+            verified=bool(((d.get("commit") or {}).get("verification") or {}).get("verified")),
+        )
+
+    def open_items(self) -> list[Issue]:
+        return [_issue(d) for d in self._pages(self._path("issues") + "?state=open&per_page=100")]
+
+    def run_titles(self, workflow: str, status: str) -> list[str]:
+        rows = self._json(["run", "list", "-R", self.repo, "--workflow", workflow, "--status", status, "--limit", "50", "--json", "displayTitle"])
+        return [str(r.get("displayTitle") or "") for r in rows or []]

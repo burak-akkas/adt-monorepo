@@ -17,7 +17,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TextIO
 
-from agentflow import config, issues, markers, states
+from agentflow import config, issues, markers, overlap, prs, queue, states
 from agentflow.config import ConfigError, Settings
 from agentflow.github import GhCli, GhError, GitHub
 from agentflow.issues import SplitError
@@ -30,9 +30,10 @@ class UsageError(Exception):
 class Context:
     """What a command gets: the environment, settings and GitHub (both made on first use), and output."""
 
-    def __init__(self, env: Mapping[str, str], gh: GitHub | None, out: TextIO) -> None:
+    def __init__(self, env: Mapping[str, str], gh: GitHub | None, out: TextIO, err: TextIO) -> None:
         self.env = env
         self.out = out
+        self.err = err
         self._gh = gh
         self._settings: Settings | None = None
 
@@ -67,7 +68,7 @@ def arg(name: str, **options: Any) -> Arg:
 
 ISSUE = arg("number", type=int, help="issue or PR number")
 
-Handler = Callable[[Context, argparse.Namespace], None]
+Handler = Callable[[Context, argparse.Namespace], "int | None"]  # the exit code (None: 0)
 
 
 @dataclass(frozen=True)
@@ -180,6 +181,123 @@ def _branch_head(ctx: Context, a: argparse.Namespace) -> None:
         ctx.print(sha)
 
 
+# --- review and approvals -------------------------------------------------------------------------
+PR = arg("pr", type=int, help="pull request number")
+SHA = arg("sha", help="commit sha")
+
+
+def _answer(ctx: Context, sha: str | None) -> int:
+    """Prints an approved sha and exits 0, or exits 1 when there is none."""
+    if sha is None:
+        return 1
+    ctx.print(sha)
+    return 0
+
+
+@command("approved-sha", "the commit the agents last approved on a PR (nothing if none)", PR)
+def _approved_sha(ctx: Context, a: argparse.Namespace) -> None:
+    sha = prs.approved_sha(ctx.gh, ctx.settings, a.pr)
+    if sha:
+        ctx.print(sha)
+
+
+@command("approve", "approve a PR's commit for the merge gate", PR, SHA, arg("role", help="the approving comment's marker: qa, reviewer, lead"))
+def _approve(ctx: Context, a: argparse.Namespace) -> None:
+    ctx.print(prs.approve(ctx.gh, ctx.settings, a.pr, a.sha, a.role))
+
+
+@command("qa-passed", "exit 0 and print the commit if QA already passed this PR's own changes", PR, SHA)
+def _qa_passed(ctx: Context, a: argparse.Namespace) -> int:
+    return _answer(ctx, prs.qa_passed(ctx.gh, ctx.settings, a.pr, a.sha))
+
+
+@command("own-diff", "a PR's own edits as of a commit (exit 2: GitHub's diff is incomplete)", arg("base"), SHA)
+def _own_diff(ctx: Context, a: argparse.Namespace) -> int:
+    try:
+        ctx.print(prs.own_diff(ctx.gh, a.base, a.sha))
+    except prs.IncompleteDiff:
+        return 2
+    return 0
+
+
+@command(
+    "same-own-changes",
+    "exit 0 and print the approved commit if the PR still makes the same edits",
+    PR,
+    SHA,
+    arg("interdiff", nargs="?", default=None, help="file to write how the edits changed"),
+)
+def _same_own_changes(ctx: Context, a: argparse.Namespace) -> int:
+    return _answer(ctx, prs.same_own_changes(ctx.gh, ctx.settings, a.pr, a.sha, a.interdiff))
+
+
+@command("clean-base-update", "exit 0 and print the approved commit if the head is only GitHub's clean merge of the base on it", PR, SHA)
+def _clean_base_update(ctx: Context, a: argparse.Namespace) -> int:
+    return _answer(ctx, prs.clean_base_update(ctx.gh, ctx.settings, a.pr, a.sha))
+
+
+@command(
+    "pr-paths",
+    "path rules: `required <pr>` lists the checks that apply, `touches <pr> <prefixes>` (exit 3 on any error)",
+    arg("rule", choices=("required", "touches")),
+    PR,
+    arg("prefixes", nargs="?", default=""),
+)
+def _pr_paths(ctx: Context, a: argparse.Namespace) -> int:
+    try:
+        if a.rule == "required":
+            ctx.print(*prs.required_checks(ctx.gh, a.pr, ctx.env.get("AGENT_REQUIRED_CHECKS") or "CI"))
+            return 0
+        return 0 if prs.touches(ctx.gh, a.pr, a.prefixes) else 1
+    except (GhError, ConfigError) as e:
+        print(f"pr-paths: {e}", file=ctx.err)
+        return 3  # never "doesn't change those paths"
+
+
+@command(
+    "pr-still-current",
+    "prints skip=<reason> when a queued Reviewer/QA run should stop",
+    PR,
+    SHA,
+    arg("required", nargs="?", default=None, help="label the PR must still have"),
+)
+def _pr_still_current(ctx: Context, a: argparse.Namespace) -> None:
+    reason = prs.still_current(ctx.gh, ctx.settings, a.pr, a.sha, a.required)
+    if reason:
+        ctx.print(f"skip={reason}")
+
+
+# --- the merge queue and conflict avoidance ----------------------------------------------------------------
+@command("queue", "the merge queue, front first: one `<pr> <state>` line each")
+def _queue(ctx: Context, a: argparse.Namespace) -> None:
+    ctx.print(*(f"{n} {state}" for n, state in queue.order(ctx.gh, ctx.settings)))
+
+
+@command("queue-tidy", "clear merge-queue labels from PRs that aren't open any more (never fails)")
+def _queue_tidy(ctx: Context, a: argparse.Namespace) -> None:
+    ctx.print(*queue.tidy(ctx.gh, ctx.settings))
+
+
+@command("sweep-conflicts", "after a merge, send open agent PRs that now conflict to the Implementor (never fails)", arg("merged", type=int), arg("base"))
+def _sweep_conflicts(ctx: Context, a: argparse.Namespace) -> None:
+    ctx.print(*queue.sweep_conflicts(ctx.gh, ctx.settings, a.merged, a.base))
+
+
+def _ignore(ctx: Context) -> str:
+    return ctx.env.get("AGENT_CONFLICT_IGNORE") or overlap.DEFAULT_IGNORE
+
+
+@command("overlap", "in-flight work that changes the files an issue's design plans to change: `#<n> <file>…` lines", ISSUE)
+def _overlap(ctx: Context, a: argparse.Namespace) -> None:
+    ctx.print(*(f"#{n} {' '.join(files)}" for n, files in overlap.blockers(ctx.gh, ctx.settings, a.number, _ignore(ctx))))
+
+
+@command("release-waiting", "start issues that waited for overlapping work (AGENT_CONFLICT_WAIT_MINUTES, never fails)")
+def _release_waiting(ctx: Context, a: argparse.Namespace) -> None:
+    minutes = config.number(ctx.env, "AGENT_CONFLICT_WAIT_MINUTES", 120)
+    ctx.print(*overlap.release_waiting(ctx.gh, ctx.settings, minutes, _ignore(ctx)))
+
+
 # --- entry point -------------------------------------------------------------------------------------
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="agentflow", description="The agent team's tooling (scripts/agents).")
@@ -208,9 +326,9 @@ def main(
             args = parser().parse_args(argv)
     except SystemExit as e:
         return 0 if e.code in (0, None) else 2
-    ctx = Context(os.environ if env is None else env, gh, out)
+    ctx = Context(os.environ if env is None else env, gh, out, err)
     try:
-        COMMANDS[args.command].run(ctx, args)
+        code = COMMANDS[args.command].run(ctx, args)
     except UsageError as e:
         print(e, file=err)
         return 2
@@ -220,4 +338,4 @@ def main(
     except (GhError, ConfigError) as e:
         print(f"{args.command}: {e}", file=err)
         return 1
-    return 0
+    return code or 0

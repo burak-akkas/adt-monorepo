@@ -35,6 +35,7 @@ class Issue:
     author_id: int
     labels: tuple[str, ...]
     is_pr: bool
+    is_draft: bool = False  # only known from listings (open_items)
 
     @property
     def is_open(self) -> bool:
@@ -48,3 +49,43 @@ class Issue:
         if self.is_open:
             return "open"
         return "dropped" if self.state_reason == "not_planned" else "done"
+
+
+@dataclass(frozen=True)
+class PullRequest:
+    number: int
+    state: str  # "OPEN", "CLOSED" or "MERGED" (gh pr view's spelling)
+    is_draft: bool
+    head_sha: str
+    head_ref: str
+    base_ref: str
+    labels: tuple[str, ...]
+    title: str
+
+    @property
+    def is_open(self) -> bool:
+        return self.state == "OPEN"
+
+    @property
+    def is_agent_branch(self) -> bool:
+        return self.head_ref.startswith("agent/")
+
+
+@dataclass(frozen=True)
+class FileChange:
+    """One file in a compare (base...head): what GitHub's compare API says about it."""
+
+    filename: str
+    status: str
+    patch: str | None  # None for binary or too large files
+    previous_filename: str | None
+    changes: int
+
+
+@dataclass(frozen=True)
+class Commit:
+    sha: str
+    parents: tuple[str, ...]
+    author_id: int | None  # the GitHub user, if the author maps to one
+    committer_login: str | None
+    verified: bool

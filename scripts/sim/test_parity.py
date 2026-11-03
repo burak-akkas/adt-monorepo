@@ -41,6 +41,12 @@ def reference_bin():
 
 
 STAMP = re.compile(r"`\d\d:\d\d`")
+# Minutes an issue waited: bash read the simulator's virtual clock, Python the real one.
+WAITED = re.compile(r"(waited |still waits \()\d+( minutes|m\))")
+
+
+def norm(text):
+    return WAITED.sub(r"\1N\2", STAMP.sub("`HH:MM`", text))
 
 
 def outcome(st):
@@ -50,9 +56,9 @@ def outcome(st):
         ids = set(it.get("comments", []))
         items[n] = {"labels": it.get("labels", []), "state": it.get("state", "OPEN"), "state_reason": it.get("state_reason"),
                     "body": it.get("body"), "sub_issues": it.get("sub_issues", []),
-                    "comments": [STAMP.sub("`HH:MM`", c["body"]) for c in st["comments_all"] if c["id"] in ids]}
+                    "comments": [norm(c["body"]) for c in st["comments_all"] if c["id"] in ids]}
     return {"items": items, "events": st.get("events", []), "created": st.get("created_issues", []),
-            "closed": st.get("closed_issues", []), "stdout": STAMP.sub("`HH:MM`", st["_stdout"]).strip(),
+            "closed": st.get("closed_issues", []), "stdout": norm(st["_stdout"]).strip(),
             "failed": st["_rc"] != 0}
 
 
@@ -277,6 +283,135 @@ def branch_heads():
     st = simlib.new_state(branches={"agent/issue-49": simlib.sha(0x49)})
     compare(st, "branch-head.sh", ["agent/issue-49"])
     compare(st, "branch-head.sh", ["agent/issue-50"])
+
+
+# --- review and approvals ---------------------------------------------------------------------------
+from simlib import approval, bot_comment, files, make_state, queued, sha  # noqa: E402
+from test_scenarios import in_flight, own_changes_state, two_queued  # noqa: E402
+
+
+@case
+def approvals_are_read_and_written():
+    st = make_state({101: {"head": sha(0xa1), "labels": ["agent:qa"], "comments": [
+        approval(sha(0xa1), "reviewer"), bot_comment("<!-- agent:qa -->\n**Verdict:** pass\n"),
+        {"body": "<!-- agent:qa -->\n<!-- agent:approved-sha %s -->" % sha(0xbb), "user": {"id": 1}}]}})
+    compare(st, "approved-sha.sh", [101])
+    compare(st, "approve.sh", [101, sha(0xa1), "qa"])
+    compare(st, "approve.sh", [101, sha(0xa1), "lead"])
+    compare(make_state({101: {"head": sha(0xa1)}}), "approved-sha.sh", [101])
+
+
+@case
+def qa_passed_cases():
+    s = sha(0xa1)
+    for comments in ([approval(s)], [approval(s), bot_comment("<!-- agent:qa -->\n**Verdict:** fail")],
+                     [bot_comment("<!-- agent:qa -->\n**Verdict:** fail"), bot_comment("<!-- agent:lead -->\n<!-- agent:approved-sha %s -->" % s)],
+                     [approval(s, "reviewer"), bot_comment("<!-- agent:integrator -->\n<!-- agent:approved-sha %s -->" % s)],
+                     [dict(approval(s), user={"id": 1})], []):
+        compare(make_state({101: {"head": s, "comments": comments}}), "qa-passed.sh", [101, s])
+    st0, appr, res1, res2 = own_changes_state()
+    st0["items"]["101"]["comments"] = []
+    for head in (res1, res2):
+        st = copy.deepcopy(st0)
+        c = dict(approval(appr), id=len(st["comments_all"]) + 1, created_at="2020-01-01T00:00:01Z")
+        st["comments_all"].append(c); st["items"]["101"]["comments"].append(c["id"])
+        compare(st, "qa-passed.sh", [101, head])
+
+
+@case
+def own_diffs_and_same_own_changes():
+    st0, appr, res1, res2 = own_changes_state()
+    for s in (appr, res1, res2):
+        compare(st0, "own-diff.sh", ["sandbox", s])
+    for head in (res1, res2, appr):
+        compare(st0, "same-own-changes.sh", [101, head])
+    st0["shas"][res1]["files"] = [{"filename": "img.png", "status": "modified", "changes": 0},
+                                  {"filename": "b.ts", "status": "renamed", "changes": 0, "previous_filename": "a.ts"}]
+    compare(st0, "own-diff.sh", ["sandbox", res1])
+    compare(st0, "same-own-changes.sh", [101, res1])
+    st0["shas"][res1]["files"] = [{"filename": "b.ts", "status": "renamed", "changes": 0, "previous_filename": "a.ts"}]
+    compare(st0, "own-diff.sh", ["sandbox", res1])
+
+
+@case
+def clean_base_updates():
+    appr, upd = sha(0xa1), sha(0xa2)
+    good = {"parents": [{"sha": appr}, {"sha": sha(0xb0)}], "author": {"id": BOT}, "committer": {"login": "web-flow"}, "commit": {"verification": {"verified": True}}}
+    for commit in (good, dict(good, author={"id": 1}), dict(good, committer={"login": "x"}), dict(good, parents=[{"sha": appr}]),
+                   dict(good, commit={"verification": {"verified": False}})):
+        st = make_state({101: {"head": upd, "comments": [approval(appr)], "extra_shas": {upd: {"base_version": 0, "files": [], "commit": commit}}}})
+        compare(st, "clean-base-update.sh", [101, upd])
+    compare(make_state({101: {"head": upd}}), "clean-base-update.sh", [101, upd])
+
+
+@case
+def pr_path_rules():
+    st = make_state({101: {"head": sha(0xa1), "files": files("+x", name="backend/a.py")}})
+    for spec in ("", "CI", " Backend CI @ backend/|shared/ , Frontend CI@web/, Lint ,", "Docs@docs/"):
+        compare(st, "pr-paths.sh", ["required", 101], AGENT_REQUIRED_CHECKS=spec)
+    for prefixes in ("web/| backend/", "web/", "  "):
+        compare(st, "pr-paths.sh", ["touches", 101, prefixes])
+    compare(dict(st, fail_cmds=["pulls/101/files"]), "pr-paths.sh", ["touches", 101, "web/"])
+    compare(dict(st, fail_cmds=["pulls/101/files"]), "pr-paths.sh", ["required", 101], AGENT_REQUIRED_CHECKS="CI@backend/")
+
+
+@case
+def pr_still_current_paths():
+    a, b = sha(0xa1), sha(0xa2)
+    for pr in ({"head": a, "labels": [], "state": "MERGED"}, {"head": a, "labels": [], "draft": True}, {"head": b, "labels": []},
+               {"head": a, "labels": ["agent:needs-decision"]}, {"head": a, "labels": ["agent:needs-human"]},
+               {"head": a, "labels": ["agent:review"]}, {"head": a, "labels": ["agent:review"], "conflict": True}):
+        compare(make_state({101: dict(pr, issue=11)}), "pr-still-current.sh", [101, a])
+    compare(make_state({101: {"head": a, "labels": ["agent:review"], "issue": 11}}), "pr-still-current.sh", [101, a, "agent:qa"])
+    compare(make_state({101: {"head": a, "comments": [approval(a)], "issue": 11}}), "pr-still-current.sh", [101, a])
+    compare(make_state({101: {"head": b, "comments": [approval(a)], "issue": 11}}), "pr-still-current.sh", [101, b])
+
+
+# --- the merge queue and conflict avoidance --------------------------------------------------------------
+@case
+def queue_order_and_tidy():
+    st = make_state({
+        105: {"head": sha(0xe1), "comments": [queued()]}, 104: {"head": sha(0xd1), "comments": [queued()]},
+        106: {"head": sha(0xf1), "labels": ["agent:integrating"], "comments": [queued()]}, 107: {"head": sha(0xf2), "labels": ["agent:review"]},
+        108: {"head": sha(0xf3), "draft": True, "comments": [queued()]}, 109: {"head": sha(0xf4)},
+        110: {"head": sha(0xf5), "labels": ["agent:queued"], "state": "MERGED"}, 111: {"head": sha(0xf6), "labels": ["agent:approved"], "state": "CLOSED"},
+    })
+    compare(st, "queue.sh")
+    compare(st, "queue-tidy.sh")
+    compare(two_queued(), "queue.sh")
+
+
+@case
+def conflicts_after_a_merge():
+    st = make_state({
+        101: {"head": sha(0xa1), "conflict": True, "issue": 11}, 102: {"head": sha(0xb1), "labels": [], "issue": 12},
+        103: {"head": sha(0xc1), "labels": ["agent:fixing"], "conflict": True}, 104: {"head": sha(0xd1), "labels": [], "conflict": True},
+        105: {"head": sha(0xe1), "labels": [], "conflict": True, "branch": "human/x"},
+    })
+    st["active_runs"] = [{"workflow": "agent-implementor.yml", "status": "queued", "name": "Agent · Implementor", "displayTitle": "T104"}]
+    compare(st, "sweep-conflicts.sh", [100, "sandbox"])
+
+
+@case
+def overlap_and_release_waiting():
+    from test_scenarios import add_issue
+    st = in_flight()
+    add_issue(st, 201, ["agent:analyzed"], ["src/a.ts", "package-lock.json", "src/new.ts", "src/c.ts"])
+    compare(st, "overlap.sh", [201])
+    compare(st, "overlap.sh", [201], AGENT_CONFLICT_IGNORE="src/*")
+    st = in_flight()
+    add_issue(st, 201, ["agent:analyzed"])
+    compare(st, "overlap.sh", [201])
+    st = make_state({101: {"head": sha(0xa1), "labels": [], "branch": "agent/issue-1", "files": files("+x", name="src/a.ts"), "state": "MERGED"}})
+    add_issue(st, 201, ["agent:waiting"], ["src/a.ts"], label_at="2020-01-01T00:00:00Z")
+    add_issue(st, 202, ["agent:waiting"], ["src/a.ts", "src/b.ts"], label_at="2020-01-01T00:00:00Z")
+    add_issue(st, 203, ["agent:waiting"], ["src/z.ts"], label_at="2020-01-01T00:00:00Z")
+    # Changed on purpose: bash ended the list of numbers with a space ("still waits (5m): #201 ", and
+    # "Expect conflicts with #201 ." in the comment).
+    out = compare(st, "release-waiting.sh", differs=["stdout"], AGENT_CONFLICT_WAIT_MINUTES=10**9)
+    assert re.search(r"^#202 still waits \(\d+m\): #201$", out["_stdout"], re.M), out["_stdout"]
+    out = compare(st, "release-waiting.sh", differs=["items", "stdout"], AGENT_CONFLICT_WAIT_MINUTES=1)
+    assert any("Expect conflicts with #201. Starting" in b for b in [c["body"] for c in out["comments_all"]]), out["_stdout"]
 
 
 def main():

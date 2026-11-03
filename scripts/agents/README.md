@@ -22,15 +22,21 @@ Each module uses only the ones above it:
 | `github` | The `GitHub` interface, and `GhCli`, which implements it with `gh` (so the simulator's fake `gh` works unchanged) |
 | `markers` | The `<!-- agent:… -->` handoff markers: only the bot's comments count, newest wins |
 | `states` | `transition` (an item's one `agent:*` label) and `progress` (the issue's progress comment) |
+| `clock` | Time, behind an interface (sleeps run `sleep`, so the simulator's instant one applies) |
 | `issues` | The issue pipeline: Lead budget, split mode, splitting, advancing split issues, waiting for other issues |
+| `prs` | Review and approvals: the approved commit, QA passes, a PR's own edits, clean base updates, path rules, the guard before a Reviewer/QA run |
+| `queue` | The merge queue's order, tidying it, and sending PRs that conflict after a merge back |
+| `overlap` | Conflict avoidance: in-flight work on the same files, and starting issues that waited for it |
 | `cli` | One command per former script |
 
 ## Tests, first
 
 A migration step always starts with tests, then the code:
 
-1. **Unit tests** (`tests/`, against `tests/fake.py`, an in-memory GitHub): the behaviour, including
-   failures. Seconds to run.
+1. **Unit tests** (`tests/`): the behaviour, including failures. `tests/support.py`'s `Repo` is the
+   real `GhCli` answered by the simulator's fake `gh` (`scripts/sim/fakegh/gh`), so there is one
+   fake to maintain, and the tests check the exact `gh` calls too. When the code needs a call the
+   fake can't answer, extend the fake. About half a minute.
 2. **Parity tests** (`scripts/sim/test_parity.py`): the bash version (from git history) and the
    Python version run on the same fake repository and must do the same. Anything changed on purpose
    is listed with the reason.
@@ -56,9 +62,10 @@ ruff check . && ruff format --check . && mypy agentflow tests
 | Group | Scripts | State |
 |---|---|---|
 | Core and issue pipeline | `transition`, `progress`, `count-comments`, `url`, `branch-head`, `lead-budget`, `split-mode`, `release-blocked`, `subissues`, `split` | Python |
-| Conflict avoidance | `overlap`, `release-waiting` | bash |
-| Review and approvals | `approve`, `approved-sha`, `qa-passed`, `own-diff`, `same-own-changes`, `pr-still-current`, `pr-paths`, `clean-base-update` | bash |
-| Merge queue | `queue`, `queue-tidy`, `sweep-conflicts`, `integrate` | bash |
+| Conflict avoidance | `overlap`, `release-waiting` | Python |
+| Review and approvals | `approve`, `approved-sha`, `qa-passed`, `own-diff`, `same-own-changes`, `pr-still-current`, `pr-paths`, `clean-base-update` | Python |
+| Merge queue | `queue`, `queue-tidy`, `sweep-conflicts` | Python |
+| Merge queue | `integrate` | bash |
 | Operations | `watchdog`, `production-check`, `app-token`, `publish-pages` | bash |
 
 Behaviour changed on purpose in the migration:
@@ -68,3 +75,5 @@ Behaviour changed on purpose in the migration:
 - `progress` skips a line when it can't read the comments, instead of starting a second progress comment.
 - `split` prints its `::error::` to stderr. On stdout the Architect workflow captured it into a
   variable, so it never reached the log.
+- `release-waiting` no longer ends its list of PRs with a space ("Expect conflicts with #201 ." in the comment).
+- `sweep-conflicts` looks at up to 100 open PRs (bash's `gh pr list` stopped at 30).

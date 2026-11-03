@@ -136,7 +136,9 @@ def pr_view(n, keys):
         elif k == "baseRefName": out[k] = st["base"]
         elif k == "labels": out[k] = [{"name": l} for l in it.get("labels", [])]
         elif k == "mergeable":
-            if rng.random() < st.get("p_unknown", 0): out[k] = "UNKNOWN"
+            plan = it.get("mergeable_plan")   # scripted answers, the last one repeats (deterministic tests)
+            if plan: out[k] = plan.pop(0) if len(plan) > 1 else plan[0]
+            elif rng.random() < st.get("p_unknown", 0): out[k] = "UNKNOWN"
             else: out[k] = "CONFLICTING" if it.get("conflict") else "MERGEABLE"
         elif k == "closingIssuesReferences": out[k] = [{"number": it["issue"]}] if it.get("issue") else []
         elif k == "number": out[k] = int(n)
@@ -243,6 +245,7 @@ if cmd == "api":
     if parts[0] == "issues" and len(parts) == 3 and parts[2] == "events":
         emit([{"event": "labeled", "label": {"name": l}, "created_at": t} for l, t in item(n).get("label_at", {}).items()], slurp)
     if parts[0] == "issues" and len(parts) == 3 and parts[2] == "assignees":
+        item(n).setdefault("assignees", []).extend(f.get("assignees[]", []))
         emit({})
     if parts[0] == "issues" and len(parts) == 3 and parts[2] == "sub_issues" and method == "POST":
         item(n).setdefault("sub_issues", []).append(int(f["sub_issue_id"][0]) - 10**6)
@@ -253,6 +256,8 @@ if cmd == "api":
         a, b = parts[1].split("...")
         if b == st["base"]:   # <sha>...<base>: base commits missing from <sha>
             st.setdefault("last_fresh_check", {})[a] = st["calls"]
+            if a in st.get("compare_status", {}):   # scripted, e.g. "diverged" for a commit that isn't on the base
+                emit({"status": st["compare_status"][a], "ahead_by": 0})
             if a not in st["shas"]:
                 emit({"ahead_by": 0, "status": "ahead"})   # a commit on the base itself
             emit({"ahead_by": st["base_version"] - st["shas"][a]["base_version"], "status": "ahead"})
