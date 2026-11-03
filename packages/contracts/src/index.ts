@@ -6,6 +6,7 @@ export * from "./cards.js";
 export * from "./checklist.js";
 export * from "./import.js";
 export * from "./lists.js";
+export * from "./members.js";
 export * from "./settings.js";
 export * from "./templates.js";
 
