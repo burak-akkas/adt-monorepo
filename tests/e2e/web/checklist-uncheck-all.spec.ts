@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../support/fixtures";
 
 test("Uncheck all unticks every item, keeps them and persists", async ({ page }) => {
   await page.goto("./");

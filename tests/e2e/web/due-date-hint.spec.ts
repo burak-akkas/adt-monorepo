@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../support/fixtures";
 
 test("card dialog shows a relative due date hint that follows the date field", async ({ page }) => {
   await page.goto("./");
