@@ -126,6 +126,7 @@ model Board {
   formerLists        BoardFormerList[]
   templates          CardTemplate[]
   archivedCards      Card[]
+  members            BoardMember[]
   // Set only by POST /boards/import. A client-chosen key makes a repeated import return the same board.
   // NULLs are distinct in Postgres, so boards without a key never collide.
   importKey          String?
@@ -133,6 +134,19 @@ model Board {
   @@unique([userId, importKey])
   @@index([userId])
   @@map("board")
+}
+
+// People a board is shared with, by lower-cased email (emails are not verified). The owner is `Board.userId`.
+model BoardMember {
+  id        String   @id @default(uuid())
+  boardId   String
+  board     Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  email     String
+  createdAt DateTime @default(now())
+
+  @@unique([boardId, email])
+  @@index([email])
+  @@map("board_member")
 }
 
 model BoardList {

@@ -18,6 +18,8 @@ export const boardSummarySchema = z.object({
   name: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  // Absent means "owner".
+  role: z.enum(["owner", "editor"]).optional(),
 });
 
 export const boardDetailSchema = boardSummarySchema.extend({

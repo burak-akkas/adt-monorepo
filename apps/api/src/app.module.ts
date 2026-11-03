@@ -5,10 +5,11 @@ import { BoardsModule } from "./boards/boards.module.js";
 import { CardsModule } from "./cards/cards.module.js";
 import { HealthController } from "./health/health.controller.js";
 import { ListsModule } from "./lists/lists.module.js";
+import { MembersModule } from "./boards/members.module.js";
 import { TemplatesModule } from "./templates/templates.module.js";
 
 @Module({
-  imports: [ArchiveModule, AuthModule, BoardsModule, CardsModule, ListsModule, TemplatesModule],
+  imports: [ArchiveModule, AuthModule, BoardsModule, CardsModule, ListsModule, MembersModule, TemplatesModule],
   controllers: [HealthController],
 })
 export class AppModule {}

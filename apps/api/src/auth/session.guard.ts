@@ -11,9 +11,12 @@ import type { Request } from "express";
 import { AUTH } from "./auth.module.js";
 import type { Auth } from "./auth.js";
 
-export type AuthedRequest = Request & { userId?: string };
+export type AuthedRequest = Request & { userId?: string; userEmail?: string };
 
-/** Only reads the Better Auth session: no session, no access (401). Sets `request.userId` for `@UserId()`. */
+/**
+ * Only reads the Better Auth session: no session, no access (401). Sets `request.userId` for `@UserId()` and the
+ * lower-cased `request.userEmail` for `@UserEmail()`.
+ */
 @Injectable()
 export class SessionGuard implements CanActivate {
   constructor(@Inject(AUTH) private readonly auth: Auth) {}
@@ -25,6 +28,7 @@ export class SessionGuard implements CanActivate {
       throw new UnauthorizedException();
     }
     request.userId = session.user.id;
+    request.userEmail = session.user.email.toLowerCase();
     return true;
   }
 }
@@ -36,3 +40,14 @@ export const UserId = createParamDecorator((_data: unknown, context: ExecutionCo
   }
   return userId;
 });
+
+export function readUserEmail(_data: unknown, context: ExecutionContext): string {
+  const userEmail = context.switchToHttp().getRequest<AuthedRequest>().userEmail;
+  if (!userEmail) {
+    throw new UnauthorizedException();
+  }
+  return userEmail;
+}
+
+/** The signed-in user's lower-cased email. */
+export const UserEmail = createParamDecorator(readUserEmail);
