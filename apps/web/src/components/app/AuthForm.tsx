@@ -86,7 +86,7 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
           {error}
         </p>
       )}
-      <Button type="submit" variant="primary" disabled={submitting}>
+      <Button type="submit" variant="primary" loading={submitting}>
         {isRegister ? "Register" : "Log in"}
       </Button>
       <p className="text-sm text-subtle">

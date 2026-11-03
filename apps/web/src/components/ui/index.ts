@@ -4,5 +4,6 @@ export { Dialog } from "./Dialog";
 export { ArchiveIcon, ChevronIcon, GearIcon, KeyboardIcon, MoreIcon, SortIcon } from "./icons";
 export { Input, Select, Textarea, type FieldSize } from "./Input";
 export { Menu, type MenuItem } from "./Menu";
+export { Spinner, type SpinnerSize } from "./Spinner";
 export { Surface } from "./Surface";
 export { Toast, ToastAction } from "./Toast";

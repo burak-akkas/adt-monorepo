@@ -56,16 +56,17 @@ import { TemplatesPanel } from "@/components/panels/TemplatesPanel";
 import { SaveErrorToast } from "@/components/app/SaveErrorToast";
 import { UndoToast } from "./UndoToast";
 import { ViewSwitch } from "@/components/views/ViewSwitch";
-import { ArchiveIcon, Button, SortIcon } from "@/components/ui";
+import { ArchiveIcon, Button, SortIcon, Spinner } from "@/components/ui";
 
 // Changes made before the boards have loaded would be lost, so the board only shows once they are here.
 export function Board() {
   const { ready } = useBoards();
   if (!ready) {
     return (
-      <p role="status" className="text-sm text-zinc-500">
-        Loading your board…
-      </p>
+      <div role="status" className="flex items-center justify-center gap-2 py-12 text-sm text-zinc-500 dark:text-zinc-400">
+        <Spinner />
+        <span>Loading your board…</span>
+      </div>
     );
   }
   return <BoardContent />;

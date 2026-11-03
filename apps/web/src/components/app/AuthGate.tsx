@@ -3,6 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 
+import { Spinner } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
 import { UNAUTHORIZED_EVENT } from "@/lib/api-client";
 import { authClient } from "@/lib/auth-client";
@@ -38,5 +39,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
     };
   }, [status, router, pathname]);
 
+  if (status === "loading") {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-subtle">
+        <Spinner size="lg" label="Loading" />
+      </div>
+    );
+  }
   return status === "authenticated" ? <>{children}</> : null;
 }

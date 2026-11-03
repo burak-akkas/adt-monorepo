@@ -17,7 +17,9 @@ describe("<Board /> while the boards load", () => {
   it("shows a loading message and no way to add a card", () => {
     state.ready = false;
     render(<Board />);
-    expect(screen.getByRole("status")).toHaveTextContent("Loading your board");
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Loading your board");
+    expect(status.querySelector("svg.animate-spin")).not.toBeNull();
     expect(screen.queryByLabelText("New card title")).not.toBeInTheDocument();
   });
 

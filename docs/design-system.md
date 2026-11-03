@@ -38,7 +38,11 @@ Props: native button props, plus `variant` (`primary` | `secondary` (default) | 
 <Button variant="ghost" size="xs" aria-label={`Edit "${title}"`}>Edit</Button>
 ```
 
+- `loading`: set while the action waits on the server. The button becomes `disabled` with `aria-busy="true"`, shows a `Spinner` over its (hidden but still named) label, and keeps its width.
 - `primary`: the main action of a form. `secondary`: bordered, for standalone actions. `ghost`: low emphasis (Cancel, Clear). `danger`: low emphasis, turns red on hover (Delete).
+
+### `Spinner`
+Props: `size` (`sm` | `md` default | `lg`), `label`, `className`. An SVG ring in `currentColor` (set the colour with a text class), so it works in light and dark; it stops spinning under `prefers-reduced-motion`. Without `label` it is decorative (`aria-hidden`); with one it renders `role="status"` and a screen-reader-only text. Use `label` for a standalone indicator, and leave it off inside something that already has a status or name.
 
 ### `Input`, `Textarea`, `Select`
 Props: native props, plus `fieldSize` (`md` default | `sm` for compact fields on cards). Forward `ref`. Always give them a `<label>` or `aria-label`.

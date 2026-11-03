@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 
-import { Button } from "@/components/ui";
+import { Button, Spinner } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
 
 const linkClass =
@@ -10,7 +10,7 @@ const linkClass =
 
 export function AccountMenu() {
   const { status, user, logout } = useAuth();
-  if (status === "loading") return null;
+  if (status === "loading") return <Spinner size="sm" label="Loading account" className="text-subtle" />;
   if (status === "anonymous") {
     return (
       <nav aria-label="Account" className="flex items-center gap-1">

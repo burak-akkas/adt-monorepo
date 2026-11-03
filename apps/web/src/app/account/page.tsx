@@ -6,6 +6,7 @@ import { useEffect } from "react";
 
 import { ChangePasswordForm } from "@/components/app/ChangePasswordForm";
 import { DeleteAccountSection } from "@/components/app/DeleteAccountSection";
+import { Spinner } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
 
 export default function AccountPage() {
@@ -16,7 +17,13 @@ export default function AccountPage() {
     if (status === "anonymous") router.replace("/login");
   }, [status, router]);
 
-  if (status !== "authenticated") return <main className="mx-auto min-h-screen max-w-sm px-4 py-12" />;
+  if (status !== "authenticated") {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-sm items-center justify-center px-4 py-12 text-subtle">
+        {status === "loading" && <Spinner size="lg" label="Loading" />}
+      </main>
+    );
+  }
 
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col gap-8 px-4 py-12">

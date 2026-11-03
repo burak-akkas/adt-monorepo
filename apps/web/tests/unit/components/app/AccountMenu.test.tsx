@@ -12,10 +12,11 @@ beforeEach(() => {
 });
 
 describe("AccountMenu", () => {
-  it("renders nothing while loading", () => {
+  it("shows a loading indicator and no links while loading", () => {
     useAuth.mockReturnValue({ status: "loading", user: null, logout });
-    const { container } = render(<AccountMenu />);
-    expect(container).toBeEmptyDOMElement();
+    render(<AccountMenu />);
+    expect(screen.getByRole("status")).toHaveTextContent("Loading account");
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
   it("shows Log in and Register links when anonymous", () => {
