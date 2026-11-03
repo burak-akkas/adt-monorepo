@@ -8,7 +8,7 @@ import {
   type ReorderChecklistRequest,
   type UpdateChecklistItemRequest,
 } from "@adt/contracts";
-import { SessionGuard, UserId } from "../auth/session.guard.js";
+import { SessionGuard, UserEmail, UserId } from "../auth/session.guard.js";
 import { ZodValidationPipe } from "../common/zod-validation.pipe.js";
 import { ChecklistService } from "./checklist.service.js";
 
@@ -20,37 +20,41 @@ export class ChecklistController {
   @Post()
   add(
     @UserId() userId: string,
+    @UserEmail() email: string,
     @Param("cardId") cardId: string,
     @Body(new ZodValidationPipe(addChecklistItemRequestSchema)) body: AddChecklistItemRequest,
   ): Promise<CardResponse> {
-    return this.checklist.add(cardId, userId, body.text);
+    return this.checklist.add(cardId, userId, email, body.text);
   }
 
   @Put("order")
   reorder(
     @UserId() userId: string,
+    @UserEmail() email: string,
     @Param("cardId") cardId: string,
     @Body(new ZodValidationPipe(reorderChecklistRequestSchema)) body: ReorderChecklistRequest,
   ): Promise<CardResponse> {
-    return this.checklist.reorder(cardId, userId, body.itemIds);
+    return this.checklist.reorder(cardId, userId, email, body.itemIds);
   }
 
   @Patch(":itemId")
   update(
     @UserId() userId: string,
+    @UserEmail() email: string,
     @Param("cardId") cardId: string,
     @Param("itemId") itemId: string,
     @Body(new ZodValidationPipe(updateChecklistItemRequestSchema)) body: UpdateChecklistItemRequest,
   ): Promise<CardResponse> {
-    return this.checklist.update(cardId, itemId, userId, body);
+    return this.checklist.update(cardId, itemId, userId, email, body);
   }
 
   @Delete(":itemId")
   remove(
     @UserId() userId: string,
+    @UserEmail() email: string,
     @Param("cardId") cardId: string,
     @Param("itemId") itemId: string,
   ): Promise<CardResponse> {
-    return this.checklist.remove(cardId, itemId, userId);
+    return this.checklist.remove(cardId, itemId, userId, email);
   }
 }

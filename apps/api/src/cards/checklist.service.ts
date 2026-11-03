@@ -1,6 +1,7 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import type { CardResponse } from "@adt/contracts";
 import type { Prisma } from "../generated/prisma/client.js";
+import { boardAccessWhere } from "../boards/board-access.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { recordActivity } from "./activity.js";
 import { cardDetails, toCard } from "./card.mapper.js";
@@ -9,9 +10,9 @@ import { cardDetails, toCard } from "./card.mapper.js";
 export class ChecklistService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
-  /** Loads a card only through its board's owner, so another user's card is simply not found. */
-  private async assertOwnedCard(tx: Prisma.TransactionClient, id: string, userId: string) {
-    const card = await tx.card.findFirst({ where: { id, list: { board: { userId } } }, select: { id: true } });
+  /** Loads a card only through a board the user owns or is a member of, so anyone else's card is simply not found. */
+  private async assertOwnedCard(tx: Prisma.TransactionClient, id: string, userId: string, email: string) {
+    const card = await tx.card.findFirst({ where: { id, list: { board: boardAccessWhere(userId, email) } }, select: { id: true } });
     if (!card) {
       throw new NotFoundException("Card not found");
     }
@@ -44,9 +45,9 @@ export class ChecklistService {
     return toCard(await tx.card.findFirstOrThrow({ where: { id: cardId }, include: cardDetails }));
   }
 
-  async add(cardId: string, userId: string, text: string): Promise<CardResponse> {
+  async add(cardId: string, userId: string, email: string, text: string): Promise<CardResponse> {
     return this.prisma.$transaction(async (tx) => {
-      await this.assertOwnedCard(tx, cardId, userId);
+      await this.assertOwnedCard(tx, cardId, userId, email);
       const position = await tx.checklistItem.count({ where: { cardId } });
       await tx.checklistItem.create({ data: { cardId, text, done: false, position } });
       return this.load(tx, cardId);
@@ -57,10 +58,11 @@ export class ChecklistService {
     cardId: string,
     itemId: string,
     userId: string,
+    email: string,
     changes: { text?: string; done?: boolean },
   ): Promise<CardResponse> {
     return this.prisma.$transaction(async (tx) => {
-      await this.assertOwnedCard(tx, cardId, userId);
+      await this.assertOwnedCard(tx, cardId, userId, email);
       const stored = await this.assertItem(tx, cardId, itemId);
       await tx.checklistItem.update({
         where: { id: itemId },
@@ -73,9 +75,9 @@ export class ChecklistService {
     });
   }
 
-  async remove(cardId: string, itemId: string, userId: string): Promise<CardResponse> {
+  async remove(cardId: string, itemId: string, userId: string, email: string): Promise<CardResponse> {
     return this.prisma.$transaction(async (tx) => {
-      await this.assertOwnedCard(tx, cardId, userId);
+      await this.assertOwnedCard(tx, cardId, userId, email);
       await this.assertItem(tx, cardId, itemId);
       await tx.checklistItem.delete({ where: { id: itemId } });
       await this.renumber(tx, cardId);
@@ -84,9 +86,9 @@ export class ChecklistService {
   }
 
   /** `itemIds` must be exactly the card's item ids, each once. */
-  async reorder(cardId: string, userId: string, itemIds: string[]): Promise<CardResponse> {
+  async reorder(cardId: string, userId: string, email: string, itemIds: string[]): Promise<CardResponse> {
     return this.prisma.$transaction(async (tx) => {
-      await this.assertOwnedCard(tx, cardId, userId);
+      await this.assertOwnedCard(tx, cardId, userId, email);
       const items = await tx.checklistItem.findMany({ where: { cardId }, select: { id: true, position: true } });
       const known = new Set(items.map((item) => item.id));
       if (itemIds.length !== items.length || new Set(itemIds).size !== itemIds.length || !itemIds.every((id) => known.has(id))) {

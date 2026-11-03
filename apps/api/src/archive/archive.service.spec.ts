@@ -215,10 +215,10 @@ describe("ArchiveService", () => {
     expect(detail.archive.map((card) => card.title)).toEqual(["a"]);
     await expect(boards.get(board.id, bob)).rejects.toBeInstanceOf(NotFoundException);
 
-    await expect(cards.get(a.id, alice)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(cards.update(a.id, alice, { title: "x" })).rejects.toBeInstanceOf(NotFoundException);
-    await expect(cards.move(a.id, alice, board.lists[1].id, 0)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(cards.remove(a.id, alice)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(cards.get(a.id, alice, emails[0])).rejects.toBeInstanceOf(NotFoundException);
+    await expect(cards.update(a.id, alice, emails[0], { title: "x" })).rejects.toBeInstanceOf(NotFoundException);
+    await expect(cards.move(a.id, alice, emails[0], board.lists[1].id, 0)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(cards.remove(a.id, alice, emails[0])).rejects.toBeInstanceOf(NotFoundException);
     expect(await prisma.card.findUniqueOrThrow({ where: { id: a.id } })).toMatchObject({ title: "a", listId: null });
   });
 

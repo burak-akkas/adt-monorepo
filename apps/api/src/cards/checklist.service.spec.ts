@@ -18,19 +18,20 @@ describe("ChecklistService", () => {
   let alice: string;
   let bob: string;
   const emails = [`alice-${run}@checklist-spec.test`, `bob-${run}@checklist-spec.test`];
+  const [aliceEmail, bobEmail] = emails;
 
   const newCard = async (userId: string) => {
     const board = await prisma.board.create({
       data: { userId, name: `B${seq++}`, lists: { create: [{ name: "L", position: 0 }] } },
       include: { lists: true },
     });
-    return cards.create(board.lists[0].id, userId, { title: "Card", priority: "medium" });
+    return cards.create(board.lists[0].id, userId, aliceEmail, { title: "Card", priority: "medium" });
   };
   const cardWithItems = async (userId: string, texts: string[]) => {
     const card = await newCard(userId);
     let updated = card;
     for (const text of texts) {
-      updated = await service.add(card.id, userId, text);
+      updated = await service.add(card.id, userId, aliceEmail, text);
     }
     return updated;
   };
@@ -67,10 +68,10 @@ describe("ChecklistService", () => {
   it("edits text and ticks or unticks explicitly", async () => {
     const card = await cardWithItems(alice, ["a", "b"]);
     const [first, second] = card.checklist.map((i) => i.id);
-    expect(summary(await service.update(card.id, first, alice, { done: true }))).toEqual(["a+", "b-"]);
-    expect(summary(await service.update(card.id, first, alice, { done: true }))).toEqual(["a+", "b-"]);
-    expect(summary(await service.update(card.id, second, alice, { text: "bb" }))).toEqual(["a+", "bb-"]);
-    expect(summary(await service.update(card.id, first, alice, { text: "aa", done: false }))).toEqual(["aa-", "bb-"]);
+    expect(summary(await service.update(card.id, first, alice, aliceEmail, { done: true }))).toEqual(["a+", "b-"]);
+    expect(summary(await service.update(card.id, first, alice, aliceEmail, { done: true }))).toEqual(["a+", "b-"]);
+    expect(summary(await service.update(card.id, second, alice, aliceEmail, { text: "bb" }))).toEqual(["a+", "bb-"]);
+    expect(summary(await service.update(card.id, first, alice, aliceEmail, { text: "aa", done: false }))).toEqual(["aa-", "bb-"]);
   });
 
   it("records checklistDone only when an item goes from not-done to done", async () => {
@@ -79,25 +80,25 @@ describe("ChecklistService", () => {
     const entries = async () =>
       (await prisma.cardActivity.findMany({ where: { cardId: card.id, type: "checklistDone" }, orderBy: { at: "asc" } })).map((e) => e.to);
 
-    await service.update(card.id, first, alice, { text: "a2" });
+    await service.update(card.id, first, alice, aliceEmail, { text: "a2" });
     expect(await entries()).toEqual([]);
 
-    await service.update(card.id, first, alice, { done: true });
+    await service.update(card.id, first, alice, aliceEmail, { done: true });
     expect(await entries()).toEqual(["a2"]);
 
-    await service.update(card.id, first, alice, { done: true });
-    await service.update(card.id, first, alice, { text: "a3" });
-    await service.update(card.id, first, alice, { done: false });
+    await service.update(card.id, first, alice, aliceEmail, { done: true });
+    await service.update(card.id, first, alice, aliceEmail, { text: "a3" });
+    await service.update(card.id, first, alice, aliceEmail, { done: false });
     expect(await entries()).toEqual(["a2"]);
 
-    await service.update(card.id, second, alice, { text: "bb", done: true });
+    await service.update(card.id, second, alice, aliceEmail, { text: "bb", done: true });
     expect(await entries()).toEqual(["a2", "bb"]);
-    expect((await cards.get(card.id, alice)).activity[0]).toMatchObject({ type: "checklistDone", to: "bb" });
+    expect((await cards.get(card.id, alice, aliceEmail)).activity[0]).toMatchObject({ type: "checklistDone", to: "bb" });
   });
 
   it("deletes an item and keeps positions dense", async () => {
     const card = await cardWithItems(alice, ["a", "b", "c"]);
-    const after = await service.remove(card.id, card.checklist[1].id, alice);
+    const after = await service.remove(card.id, card.checklist[1].id, alice, aliceEmail);
     expect(summary(after)).toEqual(["a-", "c-"]);
     const rows = await prisma.checklistItem.findMany({ where: { cardId: card.id }, orderBy: { position: "asc" } });
     expect(rows.map((r) => r.position)).toEqual([0, 1]);
@@ -106,7 +107,7 @@ describe("ChecklistService", () => {
   it("reorders with the full list of ids and keeps positions dense", async () => {
     const card = await cardWithItems(alice, ["a", "b", "c"]);
     const [a, b, c] = card.checklist.map((i) => i.id);
-    const after = await service.reorder(card.id, alice, [c, a, b]);
+    const after = await service.reorder(card.id, alice, aliceEmail, [c, a, b]);
     expect(summary(after)).toEqual(["c-", "a-", "b-"]);
     const rows = await prisma.checklistItem.findMany({ where: { cardId: card.id }, orderBy: { position: "asc" } });
     expect(rows.map((r) => r.position)).toEqual([0, 1, 2]);
@@ -114,7 +115,7 @@ describe("ChecklistService", () => {
 
   it("reorders an empty checklist with an empty list", async () => {
     const card = await newCard(alice);
-    expect((await service.reorder(card.id, alice, [])).checklist).toEqual([]);
+    expect((await service.reorder(card.id, alice, aliceEmail, [])).checklist).toEqual([]);
   });
 
   it("rejects reorder ids that are missing, extra, duplicated or foreign with 400", async () => {
@@ -123,9 +124,9 @@ describe("ChecklistService", () => {
     const [a, b] = card.checklist.map((i) => i.id);
     const foreign = other.checklist[0].id;
     for (const ids of [[a], [a, b, "nope"], [a, a], [a, foreign], [], [a, b, a]]) {
-      await expect(service.reorder(card.id, alice, ids)).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.reorder(card.id, alice, aliceEmail, ids)).rejects.toBeInstanceOf(BadRequestException);
     }
-    expect(summary(await cards.get(card.id, alice))).toEqual(["a-", "b-"]);
+    expect(summary(await cards.get(card.id, alice, aliceEmail))).toEqual(["a-", "b-"]);
   });
 
   it("gives another user's card, or an item of a different card, a 404", async () => {
@@ -133,15 +134,15 @@ describe("ChecklistService", () => {
     const other = await cardWithItems(alice, ["theirs"]);
     const itemId = card.checklist[0].id;
 
-    await expect(service.add(card.id, bob, "x")).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.update(card.id, itemId, bob, { done: true })).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.remove(card.id, itemId, bob)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.reorder(card.id, bob, [itemId])).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.update(other.id, itemId, alice, { done: true })).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.remove(other.id, itemId, alice)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.update(card.id, "missing", alice, { done: true })).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.add(card.id, bob, bobEmail, "x")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.update(card.id, itemId, bob, bobEmail, { done: true })).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.remove(card.id, itemId, bob, bobEmail)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.reorder(card.id, bob, bobEmail, [itemId])).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.update(other.id, itemId, alice, aliceEmail, { done: true })).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.remove(other.id, itemId, alice, aliceEmail)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.update(card.id, "missing", alice, aliceEmail, { done: true })).rejects.toBeInstanceOf(NotFoundException);
 
-    expect(summary(await cards.get(card.id, alice))).toEqual(["mine-"]);
-    expect(summary(await cards.get(other.id, alice))).toEqual(["theirs-"]);
+    expect(summary(await cards.get(card.id, alice, aliceEmail))).toEqual(["mine-"]);
+    expect(summary(await cards.get(other.id, alice, aliceEmail))).toEqual(["theirs-"]);
   });
 });

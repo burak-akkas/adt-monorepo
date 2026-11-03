@@ -18,13 +18,14 @@ describe("CommentsService", () => {
   let alice: string;
   let bob: string;
   const emails = [`alice-${run}@comments-spec.test`, `bob-${run}@comments-spec.test`];
+  const [aliceEmail, bobEmail] = emails;
 
   const newCard = async (userId: string, title = "Card") => {
     const board = await prisma.board.create({
       data: { userId, name: `B${seq++}`, lists: { create: [{ name: "L", position: 0 }] } },
       include: { lists: true },
     });
-    return cards.create(board.lists[0].id, userId, { title, priority: "medium" });
+    return cards.create(board.lists[0].id, userId, aliceEmail, { title, priority: "medium" });
   };
 
   beforeAll(async () => {
@@ -49,8 +50,8 @@ describe("CommentsService", () => {
 
   it("adds comments oldest first with createdAt and no editedAt", async () => {
     const card = await newCard(alice);
-    await service.add(card.id, alice, "first");
-    const updated = await service.add(card.id, alice, "second");
+    await service.add(card.id, alice, aliceEmail, "first");
+    const updated = await service.add(card.id, alice, aliceEmail, "second");
     expect(updated.comments.map((c) => c.text)).toEqual(["first", "second"]);
     for (const comment of updated.comments) {
       expect(Number.isNaN(Date.parse(comment.createdAt))).toBe(false);
@@ -60,20 +61,20 @@ describe("CommentsService", () => {
 
   it("sets editedAt only when the text changed", async () => {
     const card = await newCard(alice);
-    const id = (await service.add(card.id, alice, "hello")).comments[0].id;
+    const id = (await service.add(card.id, alice, aliceEmail, "hello")).comments[0].id;
 
-    const same = await service.edit(card.id, id, alice, "hello");
+    const same = await service.edit(card.id, id, alice, aliceEmail, "hello");
     expect(same.comments[0].editedAt).toBeNull();
 
-    const changed = await service.edit(card.id, id, alice, "hello again");
+    const changed = await service.edit(card.id, id, alice, aliceEmail, "hello again");
     expect(changed.comments[0]).toMatchObject({ id, text: "hello again" });
     expect(changed.comments[0].editedAt).not.toBeNull();
   });
 
   it("deletes a comment and returns the card", async () => {
     const card = await newCard(alice);
-    const added = await service.add(card.id, alice, "bye");
-    const after = await service.remove(card.id, added.comments[0].id, alice);
+    const added = await service.add(card.id, alice, aliceEmail, "bye");
+    const after = await service.remove(card.id, added.comments[0].id, alice, aliceEmail);
     expect(after.comments).toEqual([]);
     expect(await prisma.cardComment.count({ where: { cardId: card.id } })).toBe(0);
   });
@@ -81,15 +82,15 @@ describe("CommentsService", () => {
   it("gives another user's card and comment, or a comment of a different card, a 404", async () => {
     const card = await newCard(alice);
     const other = await newCard(alice, "Other");
-    const commentId = (await service.add(card.id, alice, "mine")).comments[0].id;
+    const commentId = (await service.add(card.id, alice, aliceEmail, "mine")).comments[0].id;
 
-    await expect(service.add(card.id, bob, "x")).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.edit(card.id, commentId, bob, "x")).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.remove(card.id, commentId, bob)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.edit(other.id, commentId, alice, "x")).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.remove(other.id, commentId, alice)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.edit(card.id, "missing", alice, "x")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.add(card.id, bob, bobEmail, "x")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.edit(card.id, commentId, bob, bobEmail, "x")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.remove(card.id, commentId, bob, bobEmail)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.edit(other.id, commentId, alice, aliceEmail, "x")).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.remove(other.id, commentId, alice, aliceEmail)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.edit(card.id, "missing", alice, aliceEmail, "x")).rejects.toBeInstanceOf(NotFoundException);
 
-    expect((await cards.get(card.id, alice)).comments.map((c) => [c.text, c.editedAt])).toEqual([["mine", null]]);
+    expect((await cards.get(card.id, alice, aliceEmail)).comments.map((c) => [c.text, c.editedAt])).toEqual([["mine", null]]);
   });
 });

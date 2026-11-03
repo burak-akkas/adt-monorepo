@@ -1,6 +1,7 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { MAX_CARD_TITLE_LENGTH, type CardResponse, type CreateCardRequest, type UpdateCardRequest } from "@adt/contracts";
 import type { Prisma } from "../generated/prisma/client.js";
+import { boardAccessWhere } from "../boards/board-access.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { recordActivity, type ActivityEntryInput } from "./activity.js";
 import { cardDetails, toCard } from "./card.mapper.js";
@@ -14,19 +15,22 @@ const COPY_SUFFIX = " (copy)";
 export class CardsService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
-  /** Loads a card only through its board's owner, so another user's card is simply not found. */
-  private async findOwnedCard(tx: Prisma.TransactionClient, id: string, userId: string) {
-    const card = await tx.card.findFirst({ where: { id, list: { board: { userId } } }, include: { ...cardDetails, list: true } });
-    // The owner filter goes through the list, so an archived card (no list) is not found here.
+  /** Loads a card only through a board the user owns or is a member of, so anyone else's card is simply not found. */
+  private async findOwnedCard(tx: Prisma.TransactionClient, id: string, userId: string, email: string) {
+    const card = await tx.card.findFirst({
+      where: { id, list: { board: boardAccessWhere(userId, email) } },
+      include: { ...cardDetails, list: true },
+    });
+    // The access filter goes through the list, so an archived card (no list) is not found here.
     if (!card || !card.list || card.listId === null) {
       throw new NotFoundException("Card not found");
     }
     return { ...card, listId: card.listId, list: card.list };
   }
 
-  /** Loads a list only through its board's owner. */
-  private async findOwnedList(tx: Prisma.TransactionClient, id: string, userId: string) {
-    const list = await tx.boardList.findFirst({ where: { id, board: { userId } } });
+  /** Loads a list only through a board the user owns or is a member of. */
+  private async findOwnedList(tx: Prisma.TransactionClient, id: string, userId: string, email: string) {
+    const list = await tx.boardList.findFirst({ where: { id, board: boardAccessWhere(userId, email) } });
     if (!list) {
       throw new NotFoundException("List not found");
     }
@@ -42,9 +46,9 @@ export class CardsService {
     }
   }
 
-  async create(listId: string, userId: string, body: CreateCardRequest): Promise<CardResponse> {
+  async create(listId: string, userId: string, email: string, body: CreateCardRequest): Promise<CardResponse> {
     return this.prisma.$transaction(async (tx) => {
-      await this.findOwnedList(tx, listId, userId);
+      await this.findOwnedList(tx, listId, userId, email);
       const position = await tx.card.count({ where: { listId } });
       const card = await tx.card.create({
         data: {
@@ -62,13 +66,13 @@ export class CardsService {
     });
   }
 
-  async get(id: string, userId: string): Promise<CardResponse> {
-    return toCard(await this.findOwnedCard(this.prisma, id, userId));
+  async get(id: string, userId: string, email: string): Promise<CardResponse> {
+    return toCard(await this.findOwnedCard(this.prisma, id, userId, email));
   }
 
-  async update(id: string, userId: string, body: UpdateCardRequest): Promise<CardResponse> {
+  async update(id: string, userId: string, email: string, body: UpdateCardRequest): Promise<CardResponse> {
     return this.prisma.$transaction(async (tx) => {
-      const card = await this.findOwnedCard(tx, id, userId);
+      const card = await this.findOwnedCard(tx, id, userId, email);
       const entries: ActivityEntryInput[] = [];
       if (body.title !== undefined && body.title !== card.title) {
         entries.push({ type: "title", from: card.title, to: body.title });
@@ -102,9 +106,9 @@ export class CardsService {
     });
   }
 
-  async remove(id: string, userId: string): Promise<void> {
+  async remove(id: string, userId: string, email: string): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
-      const card = await this.findOwnedCard(tx, id, userId);
+      const card = await this.findOwnedCard(tx, id, userId, email);
       await tx.card.delete({ where: { id } });
       const rest = await tx.card.findMany({ where: { listId: card.listId }, orderBy: { position: "asc" } });
       await this.renumber(tx, card.listId, rest);
@@ -112,9 +116,9 @@ export class CardsService {
   }
 
   /** Copies a card (details, unticked checklist, no comments or activity) right after the original; positions stay dense. */
-  async duplicate(id: string, userId: string): Promise<CardResponse> {
+  async duplicate(id: string, userId: string, email: string): Promise<CardResponse> {
     return this.prisma.$transaction(async (tx) => {
-      const source = await this.findOwnedCard(tx, id, userId);
+      const source = await this.findOwnedCard(tx, id, userId, email);
       const copy = await tx.card.create({
         data: {
           listId: source.listId,
@@ -139,10 +143,10 @@ export class CardsService {
   }
 
   /** Moves a card to `position` (clamped to the end) of a list on the same board; positions stay dense. */
-  async move(id: string, userId: string, listId: string, position: number): Promise<CardResponse> {
+  async move(id: string, userId: string, email: string, listId: string, position: number): Promise<CardResponse> {
     return this.prisma.$transaction(async (tx) => {
-      const card = await this.findOwnedCard(tx, id, userId);
-      const target = await this.findOwnedList(tx, listId, userId);
+      const card = await this.findOwnedCard(tx, id, userId, email);
+      const target = await this.findOwnedList(tx, listId, userId, email);
       if (target.boardId !== card.list.boardId) {
         throw new NotFoundException("List not found");
       }
