@@ -97,41 +97,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          mkdir -p .agent-out/screenshots
-          printf '.agent-out/\n.agent-trusted/\n.gh-pages/\n' >> .git/info/exclude
-          # A queued run may be stale by now (new commits, merge-gate verdict, conflict): don't spend a round on it.
-          skip=$("$BIN/pr-still-current.sh" "$PR" "$HEAD_SHA" agent:qa)
-          if [ -n "$skip" ]; then
-            echo "Skipped QA: ${skip#skip=}" | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "stop=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "$LOCAL" = true ]; then
-            url="$LOCAL_URL"
-          else
-            url=$(echo "$URL_TEMPLATE" | sed -e "s|{owner}|${GITHUB_REPOSITORY_OWNER}|g" \
-                  -e "s|{repo}|${GITHUB_REPOSITORY#*/}|g" -e "s|{pr}|$PR|g")
-          fi
-          echo "url=$url" >> "$GITHUB_OUTPUT"
-          # QA rounds are counted since the latest Lead decision. Only failed rounds count toward the
-          # budget: QA re-runs after base updates are not a loop.
-          comments=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
-                       | jq --argjson bot "${AGENT_BOT_ID:?AGENT_BOT_ID must be set}" '[[.[][] | select(.user.id == $bot)]]')
-          total=$(echo "$comments" | jq '[.[][] | select(.body | contains("<!-- agent:qa -->"))] | length')
-          rounds=$(echo "$comments" | jq '[.[][]] as $c
-            | ([$c | to_entries[] | select(.value.body | contains("<!-- agent:lead -->")) | .key] | max // -1) as $last
-            | [$c | to_entries[] | select(.key > $last and (.value.body | contains("<!-- agent:qa -->")))] | length')
-          echo "total=$total" >> "$GITHUB_OUTPUT"
-          echo "round=$((rounds + 1))" >> "$GITHUB_OUTPUT"
-          failed=$(echo "$comments" | jq '[.[][]] as $c
-            | ([$c | to_entries[] | select(.value.body | contains("<!-- agent:lead -->")) | .key] | max // -1) as $last
-            | [$c | to_entries[] | select(.key > $last and (.value.body | contains("<!-- agent:qa -->"))
-                and (.value.body | test("\\*\\*Verdict:\\*\\*\\s*pass") | not))] | length')
-          if [ "$failed" -ge "$MAX_ROUNDS" ]; then
-            "$BIN/transition.sh" "$PR" agent:needs-decision
-            gh pr comment "$PR" --body "🛑 $MAX_ROUNDS QA rounds without a pass. Handing to the Lead."
-            echo "stop=true" >> "$GITHUB_OUTPUT"
-          fi
+          "$BIN/agent.sh" qa-guard
 
       # QA is the most expensive agent run, and the merge queue requires these checks anyway: don't
       # spend a QA round on a commit that can never merge. Red checks go straight back to the Implementor.
@@ -142,22 +108,7 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           AGENT_REQUIRED_CHECKS: ${{ vars.AGENT_REQUIRED_CHECKS || 'CI' }}
         run: |
-          # Same rules as the merge queue: only the required workflows that apply to the files this PR
-          # changes count (pr-paths.sh). Up to 25 minutes; on timeout QA runs anyway (the merge queue
-          # still waits for the checks).
-          REQUIRED=$("$BIN/pr-paths.sh" required "$PR" | paste -sd, -)
-          if [ -z "$REQUIRED" ]; then echo "result=pass" >> "$GITHUB_OUTPUT"; exit 0; fi
-          filter='[.[] | select(.workflow as $w | ($req | split(",") | map(gsub("^ +| +$"; ""))) | index($w))]'
-          for _ in $(seq 1 50); do
-            json=$(gh pr checks "$PR" -R "$GITHUB_REPOSITORY" --json workflow,name,bucket,link 2>/dev/null || true)
-            checks=$(echo "${json:-[]}" | jq --arg req "$REQUIRED" "$filter")
-            failed=$(echo "$checks" | jq -r '[.[] | select(.bucket == "fail" or .bucket == "cancel") | "[\(.name)](\(.link))"] | join(", ")')
-            pending=$(echo "$checks" | jq '[.[] | select(.bucket == "pending")] | length')
-            if [ -n "$failed" ]; then echo "result=fail" >> "$GITHUB_OUTPUT"; echo "failed=$failed" >> "$GITHUB_OUTPUT"; exit 0; fi
-            if [ "$(echo "$checks" | jq length)" -gt 0 ] && [ "$pending" -eq 0 ]; then echo "result=pass" >> "$GITHUB_OUTPUT"; exit 0; fi
-            sleep 30
-          done
-          echo "result=timeout" >> "$GITHUB_OUTPUT"
+          "$BIN/agent.sh" qa-wait-checks
 
       - name: Wait for the preview of this commit
         id: preview
@@ -167,32 +118,7 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           ENVIRONMENT: ${{ vars.AGENT_PREVIEW_ENVIRONMENT }}
         run: |
-          # AGENT_PREVIEW_URL=deployment: the preview is whatever deployment of this exact commit reports
-          # success to GitHub (Vercel, Netlify, Render and most hosts do), optionally only in
-          # AGENT_PREVIEW_ENVIRONMENT. Its environment_url is the URL QA tests. Needs the App's
-          # Deployments: Read permission.
-          if [ "$URL" = deployment ]; then
-            for _ in $(seq 1 80); do
-              found=$(gh api "repos/$GITHUB_REPOSITORY/deployments?sha=$HEAD_SHA&per_page=30" 2>/dev/null \
-                | jq -r --arg env "$ENVIRONMENT" '.[] | select($env == "" or .environment == $env) | .statuses_url' \
-                | while read -r statuses; do
-                    gh api "$statuses?per_page=1" --jq '.[0] | select(.state == "success") | .environment_url // empty' 2>/dev/null
-                  done | grep -m1 . || true)
-              if [ -n "$found" ]; then
-                echo "url=${found%/}/" >> "$GITHUB_OUTPUT"; echo "ready=true" >> "$GITHUB_OUTPUT"; exit 0
-              fi
-              sleep 15
-            done
-            echo "::warning::No successful deployment of $HEAD_SHA${ENVIRONMENT:+ in $ENVIRONMENT} reported a URL"
-            exit 0
-          fi
-          # Otherwise the preview serves version.txt with the commit it was built from.
-          for _ in $(seq 1 60); do
-            live=$(curl -fsSL "${URL}version.txt?t=$(date +%s)" 2>/dev/null | tr -d '[:space:]' || true)
-            if [ "$live" = "$HEAD_SHA" ]; then echo "url=$URL" >> "$GITHUB_OUTPUT"; echo "ready=true" >> "$GITHUB_OUTPUT"; exit 0; fi
-            sleep 15
-          done
-          echo "::warning::Preview at $URL never served $HEAD_SHA (last seen: ${live:-nothing})"
+          "$BIN/agent.sh" qa-wait-preview
 
       # The project's toolchain (same variables as the Implementor). The npm cache only when the
       # project uses npm (a package-lock.json at the root).
@@ -215,7 +141,7 @@ jobs:
           E2E_SETUP: ${{ vars.AGENT_E2E_SETUP || 'npm ci' }}
           E2E_COMMAND: ${{ vars.AGENT_E2E_COMMAND || 'npx playwright test' }}
         run: |
-          if [ "$E2E_COMMAND" != none ] && [ "$E2E_SETUP" != none ]; then bash -eo pipefail -c "$E2E_SETUP"; fi
+          "$BIN/agent.sh" qa-e2e-setup
 
       # The baseline on the runner (AGENT_BASELINE_START_COMMAND): the base branch, for QA's visual comparison.
       # It moves out of the workspace first, so that the PR's own build and tests never pick up its files.
@@ -235,20 +161,7 @@ jobs:
           START: ${{ vars.AGENT_BASELINE_START_COMMAND }}
           URL: ${{ vars.AGENT_BASELINE_LOCAL_URL || 'http://localhost:3001/' }}
         run: |
-          dir="$RUNNER_TEMP/agent-baseline"
-          mv .agent-baseline "$dir"
-          commit=$(git -C "$dir" rev-parse --short HEAD)
-          log="$PWD/.agent-out/baseline.log"
-          (cd "$dir" && nohup bash -c "$START" > "$log" 2>&1 &)
-          for _ in $(seq 1 120); do
-            if curl -fsS -o /dev/null "$URL" 2>/dev/null; then
-              echo "info=$URL (the base branch at $commit, running on this machine with its own data)" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "::warning::The baseline never answered at $URL"; tail -30 "$log"
-          echo "info=none (the baseline never answered at $URL on this machine)" >> "$GITHUB_OUTPUT"
+          "$BIN/agent.sh" qa-start-baseline
 
       # No preview deploy (AGENT_PREVIEW_URL=none): start the app on the runner and wait until it answers.
       - name: Start the app locally
@@ -258,16 +171,7 @@ jobs:
           START: ${{ vars.AGENT_QA_START_COMMAND }}
           URL: ${{ steps.guard.outputs.url }}
         run: |
-          if [ -z "$START" ]; then
-            echo "::error::AGENT_PREVIEW_URL is none, so QA needs AGENT_QA_START_COMMAND to start the app"
-            exit 0
-          fi
-          nohup bash -c "$START" > .agent-out/app.log 2>&1 &
-          for _ in $(seq 1 120); do
-            if curl -fsS -o /dev/null "$URL" 2>/dev/null; then echo "ready=true" >> "$GITHUB_OUTPUT"; exit 0; fi
-            sleep 5
-          done
-          echo "::warning::The app never answered at $URL"; tail -30 .agent-out/app.log
+          "$BIN/agent.sh" qa-start-app
 
       # The "before" side of QA's visual comparison. It's informational: QA runs either way, and is told
       # when the baseline lags the base branch (e.g. a production deploy still running).
@@ -279,27 +183,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.ref }}
           LOCAL_BASELINE: ${{ steps.baseline_local.outputs.info }}
         run: |
-          if [ -n "$LOCAL_BASELINE" ]; then
-            echo "info=$LOCAL_BASELINE" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "$BASELINE_TEMPLATE" = "none" ]; then
-            echo "info=none (visual comparison turned off)" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          url=$(echo "$BASELINE_TEMPLATE" | sed -e "s|{owner}|${GITHUB_REPOSITORY_OWNER}|g" -e "s|{repo}|${GITHUB_REPOSITORY#*/}|g")
-          live=$(curl -fsSL "${url}version.txt?t=$(date +%s)" 2>/dev/null | tr -d '[:space:]' || true)
-          base_sha=$(gh api "repos/$GITHUB_REPOSITORY/branches/$BASE" --jq .commit.sha 2>/dev/null || true)
-          if ! curl -fsSL -o /dev/null "$url" 2>/dev/null; then
-            info="none (the baseline at $url is unreachable)"
-          elif [ -z "$live" ]; then
-            info="$url (serves an unknown commit: no version.txt)"
-          elif [ "$live" = "$base_sha" ]; then
-            info="$url (serves ${live:0:7}, the head of \`$BASE\`)"
-          else
-            info="$url (serves ${live:0:7}, but \`$BASE\` is at ${base_sha:0:7}, so it lags the base branch)"
-          fi
-          echo "info=$info" | tee -a "$GITHUB_OUTPUT"
+          "$BIN/agent.sh" qa-find-baseline
 
       - name: Run e2e suite
         id: e2e
@@ -309,19 +193,7 @@ jobs:
           CI: "true"
           E2E_COMMAND: ${{ vars.AGENT_E2E_COMMAND || 'npx playwright test' }}
         run: |
-          if [ "$E2E_COMMAND" = none ]; then
-            echo "No e2e suite (AGENT_E2E_COMMAND=none)" > .agent-out/e2e-results.txt
-            echo "exit=none" >> "$GITHUB_OUTPUT"
-          else
-            set +e
-            bash -o pipefail -c "$E2E_COMMAND" > .agent-out/e2e-results.txt 2>&1
-            echo "exit=$?" >> "$GITHUB_OUTPUT"
-            set -e
-            tail -20 .agent-out/e2e-results.txt
-          fi
-          cat > .agent-out/mcp.json <<'EOF'
-          {"mcpServers":{"playwright":{"command":"npx","args":["-y","@playwright/mcp@0.0.83","--headless","--isolated","--viewport-size","1280x800","--output-dir",".agent-out/screenshots"]}}}
-          EOF
+          "$BIN/agent.sh" qa-run-e2e
 
       - uses: anthropics/claude-code-action@v1
         id: agent
@@ -356,12 +228,7 @@ jobs:
       - name: Report denied tools
         if: ${{ !cancelled() && steps.agent.outputs.execution_file != '' }}
         run: |
-          denied=$(jq -r '.[] | select(.type == "result") | .permission_denials[]? | "- `\(.tool_name)`: `\(.tool_input | tostring | .[0:300])`"' \
-                   "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || true)
-          if [ -n "$denied" ]; then
-            printf '### Denied tool calls\n%s\n' "$denied" | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "::warning::Agent had denied tool calls, see the job summary"
-          fi
+          "$BIN/agent.sh" report-denied "${{ steps.agent.outputs.execution_file }}"
 
       # Screenshots are committed to gh-pages (qa/pr-N/<run>/) and embedded via raw URLs,
       # so they show up in the PR right away. pages-janitor.yml removes them AGENT_QA_SCREENSHOT_DAYS (default 7) after the PR closes.
@@ -372,24 +239,7 @@ jobs:
           OUT: ${{ steps.agent.outputs.structured_output }}
           KEEP_DAYS: ${{ vars.AGENT_QA_SCREENSHOT_DAYS || '7' }}
         run: |
-          shopt -s nullglob
-          files=(.agent-out/screenshots/*.png .agent-out/screenshots/*.jpeg .agent-out/screenshots/*.jpg)
-          [ ${#files[@]} -eq 0 ] && { echo "No screenshots"; exit 0; }
-          dir="qa/pr-$PR/$GITHUB_RUN_ID"
-          mkdir -p .agent-out/publish && cp "${files[@]}" .agent-out/publish/
-          "$BIN/publish-pages.sh" .agent-out/publish "$dir" "qa: screenshots for PR #$PR"
-          base="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/gh-pages/$dir"
-          {
-            echo "<!-- agent:qa-screenshots -->"
-            echo "### 📸 QA screenshots (round ${{ steps.guard.outputs.round }})"
-            for f in "${files[@]}"; do
-              name=$(basename "$f")
-              caption=$(echo "${OUT:-null}" | jq -r --arg n "$name" '[.screenshots[]? | select(.file | endswith($n)) | .caption][0] // $n')
-              printf '\n**%s**\n\n![%s](%s/%s)\n' "$caption" "$name" "$base" "$name"
-            done
-            printf '\n_Screenshots are kept for %s days after this PR closes (full set in the run artifacts for 14 days)._\n' "$KEEP_DAYS"
-          } > .agent-out/gallery.md
-          gh pr comment "$PR" --body-file .agent-out/gallery.md
+          "$BIN/agent.sh" qa-publish-screenshots "${{ steps.guard.outputs.round }}"
 
       # Screenshots get their own artifact with the images at its top level: inside a bigger one they'd sit in
       # .agent-out/, a folder that macOS and others hide after unzipping.
@@ -424,20 +274,7 @@ jobs:
           OUT: ${{ steps.agent.outputs.structured_output }}
           LINK: ${{ steps.artifact.outputs.artifact-url }}
         run: |
-          shopt -s nullglob
-          files=(.agent-out/screenshots/*.png .agent-out/screenshots/*.jpeg .agent-out/screenshots/*.jpg)
-          [ ${#files[@]} -eq 0 ] && { echo "No screenshots"; exit 0; }
-          {
-            echo "<!-- agent:qa-screenshots -->"
-            echo "### 📸 QA screenshots (round ${{ steps.guard.outputs.round }})"
-            printf '\n%s screenshots are in the [run artifact](%s) (kept 14 days):\n\n' "${#files[@]}" "$LINK"
-            for f in "${files[@]}"; do
-              name=$(basename "$f")
-              caption=$(echo "${OUT:-null}" | jq -r --arg n "$name" '[.screenshots[]? | select(.file | endswith($n)) | .caption][0] // $n')
-              printf -- '- `%s`: %s\n' "$name" "$caption"
-            done
-          } > .agent-out/gallery.md
-          gh pr comment "$PR" --body-file .agent-out/gallery.md
+          "$BIN/agent.sh" qa-link-screenshots "${{ steps.guard.outputs.round }}"
 
       - name: Apply state transition
         if: ${{ !cancelled() && steps.guard.outputs.stop != 'true' }}
@@ -449,48 +286,4 @@ jobs:
           CI_FAILED: ${{ steps.ci.outputs.failed }}
           URL: ${{ steps.preview.outputs.url || steps.guard.outputs.url }}
         run: |
-          if [ "$CI_RESULT" = "fail" ]; then
-            stale=$("$BIN/pr-still-current.sh" "$PR" "$HEAD_SHA" agent:qa)
-            if [ -n "$stale" ]; then echo "CI failed, but ${stale#skip=}" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; fi
-            "$BIN/transition.sh" "$PR" agent:changes-requested
-            gh pr comment "$PR" --body "<!-- agent:merge -->
-          ❌ Required checks failed on \`${HEAD_SHA:0:7}\`: $CI_FAILED. QA was skipped, since this commit can't merge. Implementor: open the failing check, reproduce it locally, fix it, and run all checks again before pushing."
-            "$BIN/progress.sh" --pr "$PR" "🧪 **QA**: skipped, required checks failed on #$PR, back to the Implementor"
-            exit 0
-          fi
-          if [ "$READY" != "true" ]; then
-            "$BIN/transition.sh" "$PR" agent:needs-decision
-            if [ "$LOCAL" = true ]; then
-              gh pr comment "$PR" --body "⚠️ QA could not start: the app never answered at $URL on the runner (\`AGENT_QA_START_COMMAND\`, see the [run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Handing to the Lead."
-            else
-              gh pr comment "$PR" --body "⚠️ QA could not start: the preview at $URL never served commit \`${HEAD_SHA:0:7}\`. Check the Preview workflow. Handing to the Lead."
-            fi
-            exit 0
-          fi
-          verdict=$(echo "${OUT:-null}" | jq -r '.verdict // "error"')
-          if [ "$("$BIN/count-comments.sh" "$PR" qa)" -le "${{ steps.guard.outputs.total }}" ]; then
-            echo "::warning::QA returned '$verdict' but posted no report"
-            verdict=missing-comment
-          fi
-          # The PR may have changed while the agent worked (new commits, a conflict flagged by the merge
-          # gate, a Lead decision). Never apply a verdict on top of that.
-          stale=$("$BIN/pr-still-current.sh" "$PR" "$HEAD_SHA" agent:qa)
-          if [ -n "$stale" ]; then
-            echo "Verdict '$verdict' not applied: ${stale#skip=}" | tee -a "$GITHUB_STEP_SUMMARY"
-            "$BIN/progress.sh" --pr "$PR" "🧪 **QA** (round ${{ steps.guard.outputs.round }}): verdict not applied, ${stale#skip=}"
-            exit 0
-          fi
-          case "$verdict" in
-            pass)        "$BIN/approve.sh" "$PR" "$HEAD_SHA" qa ;;
-            fail)        "$BIN/transition.sh" "$PR" agent:changes-requested ;;
-            needs-human) "$BIN/transition.sh" "$PR" agent:needs-decision ;;
-            *)           "$BIN/transition.sh" "$PR" agent:needs-decision
-                         gh pr comment "$PR" --body "⚠️ QA agent failed ([run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Handing to the Lead." ;;
-          esac
-          case "${{ steps.e2e.outputs.exit }}" in 0) e2e="e2e green" ;; none) e2e="no e2e suite" ;; *) e2e="e2e failing" ;; esac
-          case "$verdict" in
-            pass) msg="passed · $e2e · screenshots on #$PR" ;;
-            fail) msg="found defects · $e2e · details and screenshots on #$PR" ;;
-            *)    msg="could not decide, handed to the Lead" ;;
-          esac
-          "$BIN/progress.sh" --pr "$PR" "🧪 **QA** (round ${{ steps.guard.outputs.round }}): $msg"
+          "$BIN/agent.sh" qa-apply "${{ steps.guard.outputs.total }}" "${{ steps.guard.outputs.round }}" "${{ steps.e2e.outputs.exit }}"

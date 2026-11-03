@@ -3,7 +3,7 @@ name: "Agent · Production check"
 # After a PR merges into the default branch: does production serve the merged commit? Off unless the
 # repository variable AGENT_PRODUCTION_CHECK_URL is set, to a URL whose body contains the deployed commit's
 # sha (a health endpoint, or version.txt). AGENT_PRODUCTION_CHECK_MINUTES (default 15) is how long to wait
-# for the deploy. A failure opens one issue for a human. See scripts/agents/production-check.sh.
+# for the deploy. A failure opens one issue for a human. See scripts/agents/agent.sh production-check.
 # pull_request_target: runs this file from the default branch and never checks out the PR's code.
 on:
   pull_request_target:
@@ -48,4 +48,4 @@ jobs:
           AGENT_PRODUCTION_CHECK_MINUTES: ${{ vars.AGENT_PRODUCTION_CHECK_MINUTES }}
           SHA: ${{ github.event.pull_request.merge_commit_sha }}
           BASE: ${{ github.event.pull_request.base.ref }}
-        run: scripts/agents/production-check.sh "$SHA" "$BASE"
+        run: scripts/agents/agent.sh production-check "$SHA" "$BASE"

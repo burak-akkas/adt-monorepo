@@ -1,0 +1,20 @@
+#!/bin/sh
+# Branch heads on origin come from the fake repository (state["branches"]: {name: sha}), so
+# branch-head.sh sees what a simulated agent pushed. Every other git command is the real git.
+if [ "$1" = "ls-remote" ] && [ -n "${FAKE_GH_STATE:-}" ]; then
+  ref=$(for a in "$@"; do :; done; echo "$a")
+  exec python3 - "$ref" <<'PY'
+import json, os, sys
+st = json.load(open(os.environ["FAKE_GH_STATE"]))
+name = sys.argv[1][len("refs/heads/"):] if sys.argv[1].startswith("refs/heads/") else sys.argv[1]
+sha = st.get("branches", {}).get(name)
+if sha:
+    print("%s\trefs/heads/%s" % (sha, name))
+PY
+fi
+for d in $(echo "$PATH" | tr ':' ' '); do
+  [ "$d" = "$(dirname "$0")" ] && continue
+  [ -x "$d/git" ] && exec "$d/git" "$@"
+done
+echo "fake git: no real git found" >&2
+exit 127

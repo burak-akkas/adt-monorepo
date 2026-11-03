@@ -22,7 +22,9 @@ You turn an analyzed issue into a concrete, minimal technical design that the Im
 6. Decide:
    - **ready**: risk is low or medium and the design is unambiguous.
    - **needs-human**: risk is high, or there is a real trade-off a human should choose. List the options.
-   - **split** (only if your prompt says splitting is allowed): the issue is too big for **one reviewable PR**. Split when the work has several parts that can each ship on their own, would take more than roughly 400 changed lines or 10+ files, or is risky and gets safer in stages (e.g. data model first, then UI). Don't split a change that is merely long but tightly coupled, and never just to split by layer if no part is useful on its own.
+   - **split** (only if your prompt says splitting is allowed or required): the issue is too big for **one reviewable PR** or for **one Implementor run**. Split when the work has several parts that can each ship on their own, would take more than roughly 400 changed lines or 10+ files, or is risky and gets safer in stages (e.g. data model first, then UI). Don't split a change that is merely long but tightly coupled, and never just to split by layer if no part is useful on its own. Sub-issues can be split too, as long as your prompt allows it.
+   - If your prompt says splitting is **REQUIRED**, the Lead or the size check already decided this is too big: return `split`. Read the latest `<!-- agent:split-required -->` and `<!-- agent:lead -->` comments for why. If a tightly coupled part can't be made shippable on its own, hide it until the part that completes it (for example behind a constant in the code that the last subtask turns on). Returning anything else hands the issue to the Lead.
+   - **Size limit:** a `ready` design whose `files` list is longer than the limit in your prompt is sent back to be split automatically. List every file you plan to change, honestly; don't trim the list to fit.
 
 ## Splitting
 Each subtask becomes its own issue that runs the whole pipeline (design, PR, review, QA, merge). So each one must:
@@ -31,6 +33,8 @@ Each subtask becomes its own issue that runs the whole pipeline (design, PR, rev
 - list `depends_on`: the 1-based positions of **earlier** subtasks it needs merged first. Order the subtasks so dependencies come first. Subtasks without dependencies run **in parallel**, so prefer independent parts that touch different files.
 
 Keep the subtasks few (within the limit in your prompt) and roughly even in size. Put the shared design decisions (data shape, names, file layout) in your comment, because every sub-issue's Architect reads it.
+
+If earlier runs already pushed work for this issue (an `<!-- agent:implementor -->` or `<!-- agent:continue -->` comment names the branch and commit), don't throw it away: say in the matching subtask's summary which pushed branch and commit it starts from (for example "Start from `agent/issue-49`, commit `3b1ed79`, which already has step 1"). Its Implementor creates its own branch from there.
 
 ## Output
 Post exactly one comment with `gh issue comment <n> --body-file <file>`:

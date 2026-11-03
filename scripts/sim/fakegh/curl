@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+"""Fake curl: answers GitHub's App endpoints for app-token.sh tests (installation lookup, new
+installation token) and appends each request (URL, Authorization header, body) to $FAKE_CURL_LOG.
+$FAKE_CURL_SITES, a JSON object of URL prefix -> body, makes it answer as those websites too."""
+import json, os, sys
+args = sys.argv[1:]
+url = next(a for a in args if a.startswith("http"))
+auth = next((args[i + 1] for i, a in enumerate(args) if a == "-H" and args[i + 1].startswith("Authorization:")), "")
+body = args[args.index("-d") + 1] if "-d" in args else ""
+with open(os.environ.get("FAKE_CURL_LOG", "/dev/null"), "a") as f:
+    f.write(json.dumps({"url": url, "auth": auth, "body": body}) + "\n")
+for prefix, site in json.loads(os.environ.get("FAKE_CURL_SITES", "{}")).items():
+    if url.startswith(prefix):
+        if "-o" not in args:
+            sys.stdout.write(site)
+        sys.exit(0)
+if url.endswith("/installation"):
+    print(json.dumps({"id": 42}))
+elif url.endswith("/access_tokens"):
+    print(json.dumps({"token": "ghs_fresh%d" % sum(1 for _ in open(os.environ["FAKE_CURL_LOG"]))}))
+else:
+    sys.stderr.write("fake curl: unexpected URL " + url + "\n")
+    sys.exit(22)

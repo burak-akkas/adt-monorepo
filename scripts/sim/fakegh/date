@@ -1,0 +1,14 @@
+#!/bin/sh
+# Virtual clock for the simulator: `date +%s` advances 60 seconds per call (under a lock, shared by
+# all simulated runs), so waits of "30 minutes" take 30 polls. Anything else goes to the real date.
+if [ "$#" -eq 1 ] && [ "$1" = "+%s" ] && [ -n "${FAKE_DATE_FILE:-}" ]; then
+  exec 9>>"$FAKE_DATE_FILE.lock"
+  flock 9
+  t=$(cat "$FAKE_DATE_FILE" 2>/dev/null || true)
+  [ -n "$t" ] || t=$(/bin/date +%s)
+  t=$((t + 60))
+  echo "$t" > "$FAKE_DATE_FILE"
+  echo "$t"
+  exit 0
+fi
+exec /bin/date "$@"

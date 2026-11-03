@@ -11,7 +11,7 @@ name: "Agent · Reviewer"
 # and the Integrator waits for it). With AGENT_QA_STAGE == 'review', AGENT_QA_ON_BASE_UPDATE == 'true'
 # sends it to QA instead.
 # A push that keeps the PR's own added/removed lines exactly as approved (a conflict resolution that
-# kept both sides, see same-own-changes.sh) is treated the same with AGENT_SKIP_REVIEW_ON_SAME_CHANGES == 'true'.
+# kept both sides, see agent.sh same-own-changes) is treated the same with AGENT_SKIP_REVIEW_ON_SAME_CHANGES == 'true'.
 # Otherwise a re-review of an approved PR gets the interdiff of its own edits since the approval.
 # PR events use pull_request_target: unlike pull_request, it also fires for PRs with merge
 # conflicts (GitHub creates no merge commit for those), and it always runs this workflow
@@ -77,92 +77,7 @@ jobs:
           QA_ON_BASE_UPDATE: ${{ vars.AGENT_QA_ON_BASE_UPDATE }}
           SKIP_SAME: ${{ vars.AGENT_SKIP_REVIEW_ON_SAME_CHANGES }}
         run: |
-          mkdir -p .agent-out
-          # A queued run may be stale by now (new commits, merge-gate verdict, conflict): don't spend a round on it.
-          skip=$("$BIN/pr-still-current.sh" "$PR" "${{ github.event.pull_request.head.sha }}")
-          if [ -n "$skip" ]; then
-            echo "Skipped review: ${skip#skip=}" | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "stop=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # The Integrator records its own updates as approved. A push event for an approved commit
-          # (e.g. after the Integrator moved on to holding the PR for QA) needs no review.
-          if [ "${{ github.event.action }}" = "synchronize" ] \
-             && [ "${{ github.event.pull_request.head.sha }}" = "$("$BIN/approved-sha.sh" "$PR")" ]; then
-            echo "Skipped review: this commit is already approved (the merge queue's update)" | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "stop=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # The Integrator (merge queue) merged the base into an approved PR (update-branch): the PR's own
-          # changes are exactly what was approved and tested, so skip re-review, and QA unless asked for.
-          # CI tests the combined code, and the Integrator waits for it. Queued PRs never get here
-          # (pr-still-current.sh skips them): this covers updates of PRs that are not in the queue.
-          if [ "${{ github.event.action }}" = "synchronize" ] \
-             && approved=$("$BIN/clean-base-update.sh" "$PR" "${{ github.event.pull_request.head.sha }}"); then
-            echo "Skipped review: only a clean merge of the base on top of approved ${approved:0:7}" | tee -a "$GITHUB_STEP_SUMMARY"
-            if [ "$QA" = "true" ] && [ "$QA_ON_BASE_UPDATE" = "true" ]; then
-              "$BIN/transition.sh" "$PR" agent:qa
-              skipped="re-review skipped, sent to QA"
-            else
-              "$BIN/approve.sh" "$PR" "${{ github.event.pull_request.head.sha }}" reviewer
-              skipped="re-review skipped, CI decides"; if [ "$QA" = "true" ]; then skipped="re-review and QA skipped, CI decides"; fi
-            fi
-            "$BIN/progress.sh" --pr "$PR" "🧐 **Reviewer**: only the base branch was merged in since the approved commit, $skipped"
-            echo "stop=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # The PR was approved before and someone (usually the Implementor resolving a conflict with the
-          # base) pushed since. If the PR's own edits are still exactly the approved ones, only code from
-          # the base changed around them: with AGENT_SKIP_REVIEW_ON_SAME_CHANGES, treat it like a clean
-          # update. Otherwise tell the Reviewer how the PR's own edits changed since the approval.
-          if [ "${{ github.event.action }}" = "synchronize" ]; then
-            if approved=$("$BIN/same-own-changes.sh" "$PR" "${{ github.event.pull_request.head.sha }}" .agent-out/interdiff.diff); then
-              if [ "$SKIP_SAME" = "true" ]; then
-                echo "Skipped review: the PR's own edits are unchanged since approved ${approved:0:7}" | tee -a "$GITHUB_STEP_SUMMARY"
-                qa_next=false
-                if [ "$QA" = "true" ] && [ "$QA_ON_BASE_UPDATE" = "true" ]; then qa_next=true; fi
-                # The comment comes first: approve.sh records the approved commit in the latest Reviewer comment.
-                gh pr comment "$PR" --body "<!-- agent:reviewer -->
-          ## 🧐 Reviewer
-
-          **Verdict:** approve
-
-          Since the approved \`${approved:0:7}\`, only the base branch was merged in: this PR's own added and removed lines are exactly the ones that were approved, so they aren't reviewed again (\`AGENT_SKIP_REVIEW_ON_SAME_CHANGES\`). $([ "$qa_next" = true ] && echo "QA tests the combined code next." || echo "CI tests the combined code before it merges.")"
-                if [ "$qa_next" = true ]; then
-                  "$BIN/transition.sh" "$PR" agent:qa
-                  skipped="re-review skipped, sent to QA"
-                else
-                  "$BIN/approve.sh" "$PR" "${{ github.event.pull_request.head.sha }}" reviewer
-                  skipped="re-review skipped, CI decides"; if [ "$QA" = "true" ]; then skipped="re-review and QA skipped, CI decides"; fi
-                fi
-                "$BIN/progress.sh" --pr "$PR" "🧐 **Reviewer**: own edits unchanged since the approval, $skipped"
-                echo "stop=true" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-            elif [ -s .agent-out/interdiff.diff ]; then
-              echo "interdiff=.agent-out/interdiff.diff" >> "$GITHUB_OUTPUT"
-              echo "approved=$("$BIN/approved-sha.sh" "$PR")" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-          # Rounds are counted since the latest Lead decision, so a Lead ruling gives the loop a fresh budget.
-          # Only rejected rounds count toward the budget: re-reviews after base updates are not a loop.
-          comments=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
-                       | jq --argjson bot "${AGENT_BOT_ID:?AGENT_BOT_ID must be set}" '[[.[][] | select(.user.id == $bot)]]')
-          total=$(echo "$comments" | jq '[.[][] | select(.body | contains("<!-- agent:reviewer -->"))] | length')
-          rounds=$(echo "$comments" | jq '[.[][]] as $c
-            | ([$c | to_entries[] | select(.value.body | contains("<!-- agent:lead -->")) | .key] | max // -1) as $last
-            | [$c | to_entries[] | select(.key > $last and (.value.body | contains("<!-- agent:reviewer -->")))] | length')
-          echo "total=$total" >> "$GITHUB_OUTPUT"
-          echo "round=$((rounds + 1))" >> "$GITHUB_OUTPUT"
-          rejected=$(echo "$comments" | jq '[.[][]] as $c
-            | ([$c | to_entries[] | select(.value.body | contains("<!-- agent:lead -->")) | .key] | max // -1) as $last
-            | [$c | to_entries[] | select(.key > $last and (.value.body | contains("<!-- agent:reviewer -->"))
-                and (.value.body | test("\\*\\*Verdict:\\*\\*\\s*approve") | not))] | length')
-          if [ "$rejected" -ge "$MAX_ROUNDS" ]; then
-            "$BIN/transition.sh" "$PR" agent:needs-decision
-            gh pr comment "$PR" --body "🛑 $MAX_ROUNDS review rounds without approval. Handing to the Lead."
-            echo "stop=true" >> "$GITHUB_OUTPUT"
-          fi
+          "$BIN/agent.sh" reviewer-guard "${{ github.event.pull_request.head.sha }}" "${{ github.event.action }}"
 
       - uses: anthropics/claude-code-action@v1
         id: agent
@@ -194,12 +109,7 @@ jobs:
       - name: Report denied tools
         if: ${{ !cancelled() && steps.agent.outputs.execution_file != '' }}
         run: |
-          denied=$(jq -r '.[] | select(.type == "result") | .permission_denials[]? | "- `\(.tool_name)`: `\(.tool_input | tostring | .[0:300])`"' \
-                   "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || true)
-          if [ -n "$denied" ]; then
-            printf '### Denied tool calls\n%s\n' "$denied" | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "::warning::Agent had denied tool calls, see the job summary"
-          fi
+          "$BIN/agent.sh" report-denied "${{ steps.agent.outputs.execution_file }}"
 
       - name: Apply state transition
         if: ${{ !cancelled() && steps.guard.outputs.stop != 'true' }}
@@ -210,56 +120,4 @@ jobs:
           QA_IN_QUEUE: ${{ vars.AGENT_QA == 'true' && vars.AGENT_QA_STAGE != 'review' && 'true' || '' }}
           QA_PATHS: ${{ vars.AGENT_QA_PATHS }}
         run: |
-          # AGENT_QA_PATHS: only PRs that change those paths (e.g. the frontend) go through browser QA.
-          # Only a clear "no" skips QA (exit 1); an error keeps it.
-          if [ "$QA" = "true" ] || [ "$QA_IN_QUEUE" = "true" ]; then
-            if [ -n "$QA_PATHS" ]; then
-              rc=0; "$BIN/pr-paths.sh" touches "$PR" "$QA_PATHS" || rc=$?
-              if [ "$rc" = 1 ]; then QA=""; QA_IN_QUEUE=""; fi
-            fi
-          fi
-          verdict=$(echo "${OUT:-null}" | jq -r '.verdict // "error"')
-          after=$("$BIN/count-comments.sh" "$PR" reviewer)
-          if [ "$after" -le "${{ steps.guard.outputs.total }}" ]; then
-            echo "::warning::Reviewer returned '$verdict' but posted no summary comment"
-            verdict=missing-comment
-          fi
-          # A run that returned no usable verdict (or forgot its comment) usually just slipped: retry
-          # once per commit before the Lead spends a decision on it.
-          if [ "$verdict" != approve ] && [ "$verdict" != request-changes ] && [ "$verdict" != needs-human ]; then
-            sha="${{ github.event.pull_request.head.sha }}"
-            if [ -z "$("$BIN/pr-still-current.sh" "$PR" "$sha")" ] \
-               && ! gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --jq '.[].body' | grep -qF "<!-- agent:reviewer-retry $sha -->"; then
-              gh pr comment "$PR" --body "<!-- agent:reviewer-retry $sha -->
-          🔁 The Reviewer run ended without a review ($verdict, [run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Retrying once."
-              "$BIN/transition.sh" "$PR" agent:review
-              exit 0
-            fi
-          fi
-          # The PR may have changed while the agent worked (new commits, a conflict flagged by the merge
-          # gate, a Lead decision). Never apply a verdict on top of that.
-          stale=$("$BIN/pr-still-current.sh" "$PR" "${{ github.event.pull_request.head.sha }}")
-          if [ -n "$stale" ]; then
-            echo "Verdict '$verdict' not applied: ${stale#skip=}" | tee -a "$GITHUB_STEP_SUMMARY"
-            "$BIN/progress.sh" --pr "$PR" "🧐 **Reviewer** (round ${{ steps.guard.outputs.round }}): verdict not applied, ${stale#skip=}"
-            exit 0
-          fi
-          case "$verdict" in
-            approve)         if [ "$QA" = "true" ]; then
-                               "$BIN/transition.sh" "$PR" agent:qa
-                             else
-                               "$BIN/approve.sh" "$PR" "${{ github.event.pull_request.head.sha }}" reviewer
-                             fi ;;
-            request-changes) "$BIN/transition.sh" "$PR" agent:changes-requested ;;
-            needs-human)     "$BIN/transition.sh" "$PR" agent:needs-decision ;;
-            *)               "$BIN/transition.sh" "$PR" agent:needs-decision
-                             gh pr comment "$PR" --body "⚠️ Reviewer agent failed ([run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Handing to the Lead." ;;
-          esac
-          case "$verdict" in
-            approve)         msg="approved"
-                             if [ "$QA" = "true" ]; then msg="$msg, sent to QA"; fi
-                             if [ "$QA_IN_QUEUE" = "true" ]; then msg="$msg, QA tests it at the front of the merge queue"; fi ;;
-            request-changes) msg="requested changes" ;;
-            *)               msg="unsure or failed, handed to the Lead" ;;
-          esac
-          "$BIN/progress.sh" --pr "$PR" "🧐 **Reviewer** (round ${{ steps.guard.outputs.round }}): $msg on #$PR"
+          "$BIN/agent.sh" reviewer-apply "${{ github.event.pull_request.head.sha }}" "${{ steps.guard.outputs.total }}" "${{ steps.guard.outputs.round }}"

@@ -50,7 +50,7 @@ jobs:
         id: before
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: echo "count=$(scripts/agents/count-comments.sh ${{ github.event.issue.number }} analyst)" >> "$GITHUB_OUTPUT"
+        run: echo "count=$(scripts/agents/agent.sh count-comments ${{ github.event.issue.number }} analyst)" >> "$GITHUB_OUTPUT"
 
       - uses: anthropics/claude-code-action@v1
         id: agent
@@ -78,12 +78,7 @@ jobs:
       - name: Report denied tools
         if: ${{ !cancelled() && steps.agent.outputs.execution_file != '' }}
         run: |
-          denied=$(jq -r '.[] | select(.type == "result") | .permission_denials[]? | "- `\(.tool_name)`: `\(.tool_input | tostring | .[0:300])`"' \
-                   "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || true)
-          if [ -n "$denied" ]; then
-            printf '### Denied tool calls\n%s\n' "$denied" | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "::warning::Agent had denied tool calls, see the job summary"
-          fi
+          scripts/agents/agent.sh report-denied "${{ steps.agent.outputs.execution_file }}"
 
       - name: Apply state transition
         if: ${{ !cancelled() }}
@@ -94,27 +89,4 @@ jobs:
           BEFORE: ${{ steps.before.outputs.count }}
           AUTONOMY: ${{ vars.AGENT_AUTONOMY }}
         run: |
-          decision=$(echo "${OUT:-null}" | jq -r '.decision // "error"')
-          after=$(scripts/agents/count-comments.sh "$N" analyst)
-          if [ "$after" -le "${BEFORE:-0}" ]; then
-            echo "::warning::analyst returned '$decision' but posted no handoff comment"
-            decision=missing-comment
-          fi
-          case "$decision" in
-            analyzed)     scripts/agents/transition.sh "$N" agent:analyzed ;;
-            needs-info)   if [ "$AUTONOMY" = "full" ]; then
-                            scripts/agents/transition.sh "$N" agent:needs-decision
-                          else
-                            scripts/agents/transition.sh "$N" agent:needs-info
-                          fi ;;
-            out-of-scope) scripts/agents/transition.sh "$N" agent:out-of-scope ;;
-            *)            scripts/agents/transition.sh "$N" agent:needs-decision
-                          gh issue comment "$N" --body "⚠️ Analyst agent failed ([run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Handing to the Lead." ;;
-          esac
-          case "$decision" in
-            analyzed)     msg="analyzed: problem statement and acceptance criteria above" ;;
-            needs-info)   msg="has open questions (see above)" ;;
-            out-of-scope) msg="out of scope (see above)" ;;
-            *)            msg="failed, handed to the Lead" ;;
-          esac
-          scripts/agents/progress.sh "$N" "🔍 **Analyst**: $msg"
+          scripts/agents/agent.sh analyst-apply

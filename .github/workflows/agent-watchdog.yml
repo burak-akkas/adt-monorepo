@@ -5,7 +5,7 @@ name: "Agent · Watchdog"
 # GitHub dropped from the concurrency queue. Re-triggers them up to AGENT_WATCHDOG_RETRIES times
 # (default 2) since the last Lead decision, then hands them to the Lead (or a human, if the Lead is
 # what stalls). It also restarts the merge queue when PRs wait in it but no Integrator run is active.
-# See scripts/agents/watchdog.sh. Manual runs can override the threshold and do a dry run.
+# See scripts/agents/agent.sh watchdog. Manual runs can override the threshold and do a dry run.
 #
 # When it runs:
 #   - AGENT_WATCHDOG_MINUTES after an agent run finished. One check waits at a time and later runs queue
@@ -33,7 +33,7 @@ on:
 env:
   AGENT_ESCALATION_ASSIGNEE: ${{ vars.AGENT_ESCALATION_ASSIGNEE }}
   AGENT_BOT_ID: ${{ vars.AGENT_BOT_ID }}   # the App's bot user id: unlike its login, it survives renames
-  AGENT_AVOID_CONFLICTS: ${{ vars.AGENT_AVOID_CONFLICTS }}           # conflict avoidance (overlap.sh, release-waiting.sh)
+  AGENT_AVOID_CONFLICTS: ${{ vars.AGENT_AVOID_CONFLICTS }}           # conflict avoidance (agent.sh overlap, agent.sh release-waiting)
   AGENT_CONFLICT_IGNORE: ${{ vars.AGENT_CONFLICT_IGNORE }}
   AGENT_CONFLICT_WAIT_MINUTES: ${{ vars.AGENT_CONFLICT_WAIT_MINUTES }}
 
@@ -79,10 +79,16 @@ jobs:
           AGENT_WATCHDOG_MINUTES: ${{ inputs.minutes || vars.AGENT_WATCHDOG_MINUTES || '10' }}
           AGENT_WATCHDOG_RETRIES: ${{ vars.AGENT_WATCHDOG_RETRIES || '2' }}
           AGENT_AUTO_MERGE: ${{ vars.AGENT_AUTO_MERGE }}   # restarts the merge queue only while merging is on
-        run: scripts/agents/watchdog.sh ${{ inputs.dry_run && '--dry-run' || '' }} | tee -a "$GITHUB_STEP_SUMMARY"
+        run: scripts/agents/agent.sh watchdog ${{ inputs.dry_run && '--dry-run' || '' }} | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Advance split issues
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: scripts/agents/subissues.sh --sweep | tee -a "$GITHUB_STEP_SUMMARY"
+        run: scripts/agents/agent.sh subissues --sweep | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Restart issues whose dependencies are done
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: scripts/agents/agent.sh release-blocked | tee -a "$GITHUB_STEP_SUMMARY"

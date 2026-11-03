@@ -1,0 +1,3 @@
+#!/bin/sh
+# The simulator's time is virtual (see date): waiting is instant.
+exit 0
