@@ -10,7 +10,7 @@ from agentflow import markers
 from agentflow.clock import Clock, SystemClock
 from agentflow.config import Settings
 from agentflow.github import GhError, GitHub
-from agentflow.model import PullRequest
+from agentflow.model import Check, PullRequest
 from agentflow.states import progress, transition
 
 APPROVED = re.compile(r"<!-- agent:approved-sha ([0-9a-f]{40}) -->")
@@ -122,6 +122,18 @@ def clean_base_update(gh: GitHub, s: Settings, pr: int, head: str) -> str | None
     return approved if gh.compare_status(c.parents[1], gh.pr(pr).base_ref) in ("identical", "ahead") else None
 
 
+def evaluate_checks(checks: list[Check], required: str) -> tuple[str, str]:
+    """(pass | fail | pending | none, the failed checks as links) for the required workflows among `checks`."""
+    wanted = [w.strip() for w in required.split(",")]
+    mine = [c for c in checks if c.workflow in wanted]
+    failed = ", ".join(f"[{c.name}]({c.link})" for c in mine if c.bucket in ("fail", "cancel"))
+    if failed:
+        return "fail", failed
+    if not mine:
+        return "none", ""
+    return ("pending" if any(c.bucket == "pending" for c in mine) else "pass"), ""
+
+
 # --- path rules (monorepos) ----------------------------------------------------------------------------
 def _prefixes(spec: str) -> list[str]:
     return [p.strip() for p in spec.split("|") if p.strip()]
@@ -201,19 +213,21 @@ def _waits_for_someone(gh: GitHub, s: Settings, view: PullRequest) -> str | None
     return "PR is waiting for a human" if "agent:needs-human" in view.labels else None
 
 
-def _stays_in_queue(gh: GitHub, s: Settings, view: PullRequest) -> bool:
-    """A queued PR whose head is the approved commit (or the Integrator's clean update of it) stays the
-    Integrator's business. Anyone else's push takes it out of the queue, and this run reviews it."""
+def _stays_in_queue(gh: GitHub, s: Settings, view: PullRequest) -> str | None:
+    """Why a queued PR stays the Integrator's business: its head is the approved commit, or the
+    Integrator's clean update of it, or that couldn't be checked (an API error must never take a PR out
+    of the queue: the Integrator may be merging it right now). None: anyone else's push took it out of
+    the queue, and this run reviews it."""
     try:
         if view.head_sha == approved_sha(gh, s, view.number) or clean_base_update(gh, s, view.number, view.head_sha) is not None:
-            return True
+            return "PR is in the merge queue"
     except GhError:
-        pass
+        return "PR is in the merge queue (couldn't check its new commits, the Integrator decides)"
     pr = view.number
     transition(gh, s, pr, None)
     gh.comment(pr, f"🔁 #{pr} got new commits while it was in the merge queue, so it leaves the queue and goes through review again.")
     progress(gh, s, f"🚦 **Merge queue**: #{pr} got new commits, left the queue for review", pr=pr)
-    return False
+    return None
 
 
 def _send_back_if_conflicting(gh: GitHub, s: Settings, view: PullRequest, clock: Clock) -> bool:
@@ -240,8 +254,9 @@ def still_current(gh: GitHub, s: Settings, pr: int, sha: str, required: str | No
         return reason
     labels = view.labels
     if "agent:queued" in labels or "agent:integrating" in labels:
-        if _stays_in_queue(gh, s, view):
-            return "PR is in the merge queue"
+        stays = _stays_in_queue(gh, s, view)
+        if stays:
+            return stays
         labels = gh.pr(pr).labels  # it just left the queue
     if required and required not in labels:
         return f"PR no longer has {required} (labels: {','.join(labels) or 'none'})"

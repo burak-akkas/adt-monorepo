@@ -365,6 +365,9 @@ if cmd == "pr":
     if sub == "close":
         item(args[2])["state"] = "CLOSED"
         done()
+    if sub == "ready":
+        item(args[2])["draft"] = False
+        done()
     fail("fake gh: unsupported pr " + sub)
 
 if cmd == "run" and args[1] == "list":

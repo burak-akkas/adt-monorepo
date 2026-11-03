@@ -70,25 +70,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          mkdir -p .agent-out
-          printf '.agent-out/\n.agent-trusted/\n' >> .git/info/exclude
-          used=$("$BIN/agent.sh" lead-budget "$N")
-          echo "used=$used" >> "$GITHUB_OUTPUT"
-          echo "total=$("$BIN/agent.sh" count-comments "$N" lead)" >> "$GITHUB_OUTPUT"
-          if [ "$KIND" = issue ]; then
-            split=$("$BIN/agent.sh" split-mode "$N")
-            case "$split" in
-              not-allowed*) echo "split=not-allowed" >> "$GITHUB_OUTPUT"
-                            echo "split_text=not possible (${split#not-allowed })" >> "$GITHUB_OUTPUT" ;;
-              *)            echo "split=allowed" >> "$GITHUB_OUTPUT"
-                            echo "split_text=possible, choose \`split\` if the work is too big for one Implementor run or one reviewable PR" >> "$GITHUB_OUTPUT" ;;
-            esac
-          fi
-          if [ "$used" -ge "$MAX_DECISIONS" ]; then
-            "$BIN/agent.sh" transition "$N" agent:needs-human
-            gh api "repos/$GITHUB_REPOSITORY/issues/$N/comments" -f body="🛑 Lead has already made $used decisions here without resolving it. Escalating to a human." >/dev/null
-            echo "stop=true" >> "$GITHUB_OUTPUT"
-          fi
+          "$BIN/agent.sh" lead-guard
 
       - uses: anthropics/claude-code-action@v1
         id: agent
@@ -121,12 +103,7 @@ jobs:
       - name: Report denied tools
         if: ${{ !cancelled() && steps.agent.outputs.execution_file != '' }}
         run: |
-          denied=$(jq -r '.[] | select(.type == "result") | .permission_denials[]? | "- `\(.tool_name)`: `\(.tool_input | tostring | .[0:300])`"' \
-                   "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || true)
-          if [ -n "$denied" ]; then
-            printf '### Denied tool calls\n%s\n' "$denied" | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "::warning::Agent had denied tool calls, see the job summary"
-          fi
+          "$BIN/agent.sh" report-denied "${{ steps.agent.outputs.execution_file }}"
 
       - name: Apply decision
         if: ${{ !cancelled() && steps.guard.outputs.stop != 'true' }}
@@ -136,42 +113,4 @@ jobs:
           TOTAL: ${{ steps.guard.outputs.total }}
           SPLIT: ${{ steps.guard.outputs.split }}
         run: |
-          action=$(echo "${OUT:-null}" | jq -r '.action // "error"')
-          reason=$(echo "${OUT:-null}" | jq -r '.rationale // "no rationale"')
-          if [ "$("$BIN/agent.sh" count-comments "$N" lead)" -le "$TOTAL" ]; then
-            echo "::warning::Lead returned '$action' but posted no decision comment"
-            action=missing-comment
-          fi
-          echo "Lead decision on $KIND #$N: $action ($reason)" >> "$GITHUB_STEP_SUMMARY"
-
-          case "$KIND:$action" in
-            issue:restart-analysis) "$BIN/agent.sh" transition "$N" agent:start ;;
-            issue:redesign)         "$BIN/agent.sh" transition "$N" agent:analyzed ;;
-            issue:implement)        "$BIN/agent.sh" transition "$N" agent:ready ;;
-            issue:split)            if [ "$SPLIT" = allowed ]; then
-                                      gh api "repos/$GITHUB_REPOSITORY/issues/$N/comments" -f body="<!-- agent:split-required -->
-          🧩 **The Lead asked for a split.** The Architect runs again and splits this issue into sub-issues (see the Lead's comment above)." >/dev/null
-                                      "$BIN/agent.sh" transition "$N" agent:analyzed
-                                    else
-                                      action=escalate
-                                      "$BIN/agent.sh" transition "$N" agent:needs-human
-                                      gh api "repos/$GITHUB_REPOSITORY/issues/$N/comments" -f body="⚠️ Lead chose \`split\`, but this issue can't be split further. Escalating to a human." >/dev/null
-                                    fi ;;
-            issue:close)            "$BIN/agent.sh" transition "$N" agent:out-of-scope
-                                    gh issue close "$N" --reason "not planned" ;;
-            pr:fix)                 "$BIN/agent.sh" transition "$N" agent:changes-requested ;;
-            pr:re-review)           "$BIN/agent.sh" transition "$N" agent:review ;;
-            pr:qa)                  "$BIN/agent.sh" transition "$N" agent:qa ;;
-            pr:approve)             "$BIN/agent.sh" approve "$N" "${{ github.event.pull_request.head.sha }}" lead ;;
-            pr:close)               "$BIN/agent.sh" transition "$N"
-                                    gh pr close "$N" --delete-branch ;;
-            *:escalate)             "$BIN/agent.sh" transition "$N" agent:needs-human ;;
-            *)                      "$BIN/agent.sh" transition "$N" agent:needs-human
-                                    gh api "repos/$GITHUB_REPOSITORY/issues/$N/comments" \
-                                      -f body="⚠️ Lead could not decide ('$action', [run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Escalating to a human." >/dev/null ;;
-          esac
-          if [ "$KIND" = "issue" ]; then
-            .agent-trusted/scripts/agents/agent.sh progress "$N" "🧭 **Lead**: $action"
-          else
-            .agent-trusted/scripts/agents/agent.sh progress --pr "$N" "🧭 **Lead** (on #$N): $action"
-          fi
+          "$BIN/agent.sh" lead-apply "${{ github.event.pull_request.head.sha }}"

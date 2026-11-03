@@ -101,7 +101,7 @@ def _analysis(summary: str, parent: int, criteria: Sequence[str]) -> str:
     )
 
 
-def split(gh: GitHub, s: Settings, parent: int, plan: Mapping[str, Any], max_subissues: int = 5) -> list[str]:
+def split(gh: GitHub, s: Settings, parent: int, plan: Mapping[str, Any], max_subissues: int = 5, *, out: list[str] | None = None) -> list[str]:
     """Splits a parent issue into sub-issues, following the Architect's plan
     ({"subtasks": [{"title", "summary", "acceptance_criteria", "depends_on"}]}).
 
@@ -112,7 +112,7 @@ def split(gh: GitHub, s: Settings, parent: int, plan: Mapping[str, Any], max_sub
     """
     subtasks = _check_plan(plan, max_subissues)
     labels.ensure(gh, "agent:split", "agent:blocked")
-    out: list[str] = []
+    out = [] if out is None else out  # filled as it goes, so a caller sees what was created if it fails midway
     created: list[int] = []
     rows: list[str] = []
     for task in subtasks:

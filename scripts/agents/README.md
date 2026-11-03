@@ -1,7 +1,9 @@
 # Agent tooling
 
 Everything the agent workflows (`.github/workflows/agent-*.yml`) run besides the agents themselves, as
-one Python package, `agentflow`, with one entry point:
+one Python package, `agentflow`, with one entry point. No workflow step holds logic in bash: each is
+one line, `"$BIN/agent.sh" <command> [values from the event]`, and reads its settings from the step's
+`env:`.
 
 ```bash
 scripts/agents/agent.sh <command> [args]
@@ -26,6 +28,8 @@ user site-packages out, so only this code runs). The package uses only the stand
 | Review and approvals | `approve`, `approved-sha`, `qa-passed`, `own-diff`, `same-own-changes`, `clean-base-update`, `pr-paths`, `pr-still-current` |
 | The merge queue | `queue`, `queue-tidy`, `sweep-conflicts`, `integrate` |
 | Operations | `watchdog`, `production-check`, `app-token`, `publish-pages` |
+| Workflow steps around the agents | `analyst-apply`, `architect-split-mode`, `architect-apply`, `implementor-prepare`, `implementor-apply`, `fix-prepare`, `fix-apply`, `reviewer-guard`, `reviewer-apply`, `qa-guard`, `qa-wait-checks`, `qa-wait-preview`, `qa-apply`, `lead-guard`, `lead-apply`, `merge-risk-gate`, `merge-join`, `integrate-queue`, `report-denied` |
+| QA on the runner | `qa-e2e-setup`, `qa-start-baseline`, `qa-start-app`, `qa-find-baseline`, `qa-run-e2e`, `qa-publish-screenshots`, `qa-link-screenshots` |
 | Setting a repository up (run by a person) | `setup-labels <owner/repo>`, `doctor <owner/repo>` |
 
 ## Layers
@@ -47,6 +51,8 @@ Each module uses only the ones above it:
 | `overlap` | Conflict avoidance: in-flight work on the same files, and starting issues that waited for it |
 | `integrator` | The Integrator's work on one queued PR: approval, update, checks, QA hold, merge |
 | `watchdog`, `production`, `tokens`, `pages`, `doctor` | Operations: stalled work, the production check, App tokens, gh-pages, setup checks |
+| `step` | What every workflow step shares: outputs, summary, the agent's structured result, denied tool calls |
+| `roles`, `review`, `qa_run` | The workflow steps: around the issue-side agents, around the Reviewer, QA and Lead plus the merge gate, and QA's runner work |
 | `cli` | The commands |
 
 ## Tests, first
@@ -57,8 +63,9 @@ Every change starts with tests, then the code:
    real `GhCli` answered by the simulator's fake `gh` (`scripts/sim/fakegh/gh`), so there is one
    fake to maintain, and the tests check the exact `gh` calls too. When the code needs a call the
    fake can't answer, extend the fake.
-2. **Parity tests** (`scripts/sim/test_parity.py`): the commands that replaced bash scripts run on
-   the same fake repository as those scripts did (from git history, `PARITY_REF`) and must do the
+2. **Parity tests**: `scripts/sim/test_parity.py` runs the commands that replaced bash scripts, and
+   `scripts/sim/test_step_parity.py` the workflow steps that replaced inline bash, on the same fake
+   repository as the old versions (from git history: `PARITY_REF`, `STEP_REF`) and they must do the
    same. Anything changed on purpose is listed per case, with the reason.
 3. **The simulator** (`scripts/sim`): the scenarios, the issue-pipeline simulation and the matrix run
    the real workflow steps, which call these commands.
@@ -92,3 +99,5 @@ ruff check . && ruff format --check . && mypy agentflow tests
   prefixes; bash used them as regular expressions.
 - `watchdog --dry-run` prints `would run: transition 7 agent:ready` instead of a script path.
 - `publish-pages` copies with Python instead of `rsync`.
+- A split plan the Architect got wrong is an `::error::` annotation in the Architect step's log
+  (before, the split script printed it to its stderr, so it was plain text).

@@ -46,8 +46,10 @@ jobs:
           mypy agentflow tests
           python3 -m unittest discover -s tests -t . -v
 
-      - name: Parity with the bash scripts
-        run: python3 scripts/sim/test_parity.py
+      - name: Parity with the bash scripts and the inline workflow bash
+        run: |
+          python3 scripts/sim/test_parity.py
+          python3 scripts/sim/test_step_parity.py
 
       - name: Scenario tests
         run: python3 scripts/sim/test_scenarios.py

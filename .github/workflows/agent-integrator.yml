@@ -90,29 +90,4 @@ jobs:
           AGENT_APP_PRIVATE_KEY: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
           AGENT_TOKEN_CACHE: ${{ runner.temp }}/agent-app-token
         run: |
-          if [ -n "${AGENT_TOKEN_CACHE:-}" ]; then (umask 077; printf '%s %s\n' "$(date +%s)" "$GH_TOKEN" > "$AGENT_TOKEN_CACHE"); fi
-          start=$(date +%s)
-          seen=" "
-          echo "### 🚦 Merge queue" >> "$GITHUB_STEP_SUMMARY"
-          # Queue labels left on PRs that are no longer open (e.g. a run killed right after a merge).
-          "$BIN/agent.sh" queue-tidy >> "$GITHUB_STEP_SUMMARY"
-          while :; do
-            queue=$("$BIN/agent.sh" queue)
-            # Each PR once per run: a PR sent to the back of the queue is picked up by the next run.
-            next=$(echo "$queue" | awk -v seen="$seen" 'NF && index(seen, " " $1 " ") == 0 { print $1; exit }')
-            if [ -z "$next" ]; then
-              echo "Queue is empty$([ -n "$queue" ] && echo " (the rest is for the next run: $(echo "$queue" | awk '{print "#" $1}' | xargs))")." >> "$GITHUB_STEP_SUMMARY"
-              break
-            fi
-            if [ $(( $(date +%s) - start )) -ge $(( DRAIN_MINUTES * 60 )) ]; then
-              # Re-applying the label starts a fresh run (it queues behind this one) and keeps #$next's place.
-              "$BIN/agent.sh" transition "$next" agent:queued
-              echo "Time budget used, handed #$next and the rest of the queue to a fresh run." >> "$GITHUB_STEP_SUMMARY"
-              break
-            fi
-            seen="$seen$next "
-            if token=$("$BIN/agent.sh" app-token); then export GH_TOKEN="$token"; fi
-            echo "Queue: $(echo "$queue" | awk '{print "#" $1 " (" $2 ")"}' | xargs)"
-            result=$("$BIN/agent.sh" integrate "$next" | tail -1) || result="result=error"
-            echo "- #$next: ${result#result=}" >> "$GITHUB_STEP_SUMMARY"
-          done
+          "$BIN/agent.sh" integrate-queue
