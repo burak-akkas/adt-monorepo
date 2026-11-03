@@ -1,20 +1,25 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
 import { Button, Input } from "@/components/ui";
 import { authClient } from "@/lib/auth-client";
 import { GENERIC_ERROR, authErrorMessage, validateAuthForm, type AuthMode } from "@/lib/authErrors";
+import { USE_SERVER_BOARDS } from "@/lib/config";
+import { safeNextPath } from "@/lib/nextPath";
 
 export function AuthForm({ mode }: { mode: AuthMode }) {
   const router = useRouter();
+  const next = useSearchParams().get("next");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const isRegister = mode === "register";
+  const safeNext = safeNextPath(next);
+  const linkSuffix = USE_SERVER_BOARDS && safeNext !== "/" ? `?next=${encodeURIComponent(safeNext)}` : "";
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -41,7 +46,7 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
         setError(authErrorMessage(mode, apiError, retryAfter));
         return;
       }
-      router.push("/");
+      router.push(USE_SERVER_BOARDS ? safeNextPath(next) : "/");
     } catch {
       setError(GENERIC_ERROR);
     } finally {
@@ -87,7 +92,7 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
       </Button>
       <p className="text-sm text-subtle">
         {isRegister ? "Already have an account? " : "No account yet? "}
-        <Link href={isRegister ? "/login" : "/register"} className="underline">
+        <Link href={`${isRegister ? "/login" : "/register"}${linkSuffix}`} className="underline">
           {isRegister ? "Log in" : "Register"}
         </Link>
       </p>

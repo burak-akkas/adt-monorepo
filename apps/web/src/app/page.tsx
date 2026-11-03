@@ -1,3 +1,4 @@
+import { AuthGate } from "@/components/app/AuthGate";
 import { BoardUrlSync } from "@/components/app/BoardUrlSync";
 import { ThemeSync } from "@/components/app/ThemeSync";
 import { TitleSync } from "@/components/app/TitleSync";
@@ -6,7 +7,7 @@ import { Board } from "@/components/board/Board";
 
 export default function Home() {
   return (
-    <>
+    <AuthGate>
       <TopBar />
       <BoardUrlSync />
       <ThemeSync />
@@ -17,6 +18,6 @@ export default function Home() {
         </p>
         <Board />
       </main>
-    </>
+    </AuthGate>
   );
 }

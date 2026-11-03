@@ -58,6 +58,21 @@ describe("apiRequest", () => {
     expect(error).toMatchObject({ kind, status, message: "nope" });
   });
 
+  it("dispatches adt:unauthorized on a 401 only, and still throws", async () => {
+    const listener = vi.fn();
+    window.addEventListener("adt:unauthorized", listener);
+    try {
+      stubFetch(json({}, 403));
+      await apiRequest("/boards").catch(() => undefined);
+      expect(listener).not.toHaveBeenCalled();
+      stubFetch(json({}, 401));
+      await expect(apiRequest("/boards")).rejects.toBeInstanceOf(ApiError);
+      expect(listener).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("adt:unauthorized", listener);
+    }
+  });
+
   it("uses a generic message when the error has no message", async () => {
     stubFetch(new Response("<html>", { status: 502 }));
     const error = await apiRequest("/boards").catch((e: unknown) => e);
