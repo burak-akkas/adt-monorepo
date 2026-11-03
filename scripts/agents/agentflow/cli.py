@@ -17,7 +17,26 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TextIO
 
-from agentflow import config, doctor, integrator, issues, labels, markers, overlap, pages, production, prs, queue, states, tokens, watchdog
+from agentflow import (
+    config,
+    doctor,
+    integrator,
+    issues,
+    labels,
+    markers,
+    overlap,
+    pages,
+    production,
+    prs,
+    qa_run,
+    queue,
+    review,
+    roles,
+    states,
+    step,
+    tokens,
+    watchdog,
+)
 from agentflow.clock import SystemClock
 from agentflow.config import ConfigError, Settings
 from agentflow.github import GhCli, GhError, GitHub
@@ -367,6 +386,223 @@ def _publish_pages(ctx: Context, a: argparse.Namespace) -> int:
         ctx.print(f"::error::{e}")
         return 1
     return 0
+
+
+# --- workflow steps: what happens around each agent run ----------------------------------------------------
+# Each reads the step's `env:` (as the workflow sets it) and writes its outputs to GITHUB_OUTPUT. Values the
+# workflow knows only from the event or earlier steps come as arguments.
+def _io(ctx: Context) -> step.FileStepIO:
+    return step.FileStepIO(ctx.env, ctx.out)
+
+
+def count(value: str) -> int:
+    """A count from an earlier step's output; empty (the step stopped early) is 0."""
+    return int(value) if value.strip() else 0
+
+
+def _n(ctx: Context, name: str, default: int = 0) -> int:
+    return config.number(ctx.env, name, default)
+
+
+def _s(ctx: Context, name: str) -> str:
+    return ctx.env.get(name, "")
+
+
+def _is(ctx: Context, name: str) -> bool:
+    return ctx.env.get(name) == "true"
+
+
+@command("report-denied", "list the tool calls the permission system refused in an agent run", arg("execution_file"))
+def _report_denied(ctx: Context, a: argparse.Namespace) -> None:
+    step.denied_tools(a.execution_file, _io(ctx))
+
+
+@command("analyst-apply", "the next state after the Analyst (env: OUT, N, BEFORE, AUTONOMY)")
+def _analyst_apply(ctx: Context, a: argparse.Namespace) -> None:
+    roles.analyst_apply(ctx.gh, ctx.settings, _io(ctx), _n(ctx, "N"), raw=_s(ctx, "OUT"), before=_n(ctx, "BEFORE"), autonomy=_s(ctx, "AUTONOMY"))
+
+
+@command("architect-split-mode", "the Architect's split mode and how its prompt says it (env: N, AGENT_SPLIT, AGENT_MAX_SPLIT_DEPTH, MAX)")
+def _architect_split_mode(ctx: Context, a: argparse.Namespace) -> None:
+    enabled, depth, most = config.flag(ctx.env, "AGENT_SPLIT", True), _n(ctx, "AGENT_MAX_SPLIT_DEPTH", 2), _n(ctx, "MAX", 5)
+    roles.architect_split_mode(ctx.gh, ctx.settings, _io(ctx), _n(ctx, "N"), enabled=enabled, max_depth=depth, max_subissues=most)
+
+
+@command("architect-apply", "the next state after the Architect: ready, waiting, split, sent back to split, or the Lead")
+def _architect_apply(ctx: Context, a: argparse.Namespace) -> None:
+    rules = roles.DesignRules(
+        split_mode=_s(ctx, "SPLIT_MODE") or "allowed",
+        require_approval=_is(ctx, "REQUIRE_APPROVAL"),
+        max_subissues=_n(ctx, "AGENT_MAX_SUBISSUES", 5),
+        max_files=_n(ctx, "MAX_FILES", 20),
+        avoid_conflicts=_is(ctx, "AVOID_CONFLICTS"),
+        conflict_ignore=_ignore(ctx),
+    )
+    roles.architect_apply(ctx.gh, ctx.settings, _io(ctx), _n(ctx, "N"), raw=_s(ctx, "OUT"), before=_n(ctx, "BEFORE"), rules=rules)
+
+
+@command("implementor-prepare", "before the Implementor: git identity, where its branch stands, agent:in-progress (env: N, BRANCH, BOT)")
+def _implementor_prepare(ctx: Context, a: argparse.Namespace) -> None:
+    roles.implementor_prepare(ctx.gh, ctx.settings, _io(ctx), _n(ctx, "N"), branch=_s(ctx, "BRANCH"), bot=_s(ctx, "BOT"), bot_id=str(ctx.settings.bot))
+
+
+@command("implementor-apply", "the next state after the Implementor: its PR, waiting, a continuation, or the Lead")
+def _implementor_apply(ctx: Context, a: argparse.Namespace) -> None:
+    roles.implementor_apply(
+        ctx.gh, ctx.settings, _io(ctx), _n(ctx, "N"), raw=_s(ctx, "OUT"), branch=_s(ctx, "BRANCH"), before=_s(ctx, "BEFORE"),
+        max_continuations=_n(ctx, "MAX_CONTINUATIONS", 3), links=ctx.env,
+    )  # fmt: skip
+
+
+@command("fix-prepare", "before the Implementor fixes a PR: git identity, agent:fixing (env: PR, BOT)")
+def _fix_prepare(ctx: Context, a: argparse.Namespace) -> None:
+    roles.fix_prepare(ctx.gh, ctx.settings, _io(ctx), _n(ctx, "PR"), bot=_s(ctx, "BOT"), bot_id=str(ctx.settings.bot))
+
+
+@command("fix-apply", "after the Implementor fixed a PR: back to review, or the Lead (env: OUT, PR)")
+def _fix_apply(ctx: Context, a: argparse.Namespace) -> None:
+    roles.fix_apply(ctx.gh, ctx.settings, _io(ctx), _n(ctx, "PR"), raw=_s(ctx, "OUT"))
+
+
+def _qa_rules(ctx: Context) -> review.QaRules:
+    return review.QaRules(in_review=_is(ctx, "QA"), on_base_update=_is(ctx, "QA_ON_BASE_UPDATE"), in_queue=_is(ctx, "QA_IN_QUEUE"), paths=_s(ctx, "QA_PATHS"))
+
+
+@command("reviewer-guard", "is this Reviewer run still worth doing, and which round is it", SHA, arg("action", help="the pull_request event's action"))
+def _reviewer_guard(ctx: Context, a: argparse.Namespace) -> None:
+    review.reviewer_guard(
+        ctx.gh, ctx.settings, _io(ctx), _n(ctx, "PR"), head=a.sha, action=a.action, qa=_qa_rules(ctx), skip_same=_is(ctx, "SKIP_SAME"),
+        max_rounds=_n(ctx, "MAX_ROUNDS", 3),
+    )  # fmt: skip
+
+
+@command("reviewer-apply", "what the Reviewer's verdict leads to", SHA, arg("total", type=count), arg("round", type=count))
+def _reviewer_apply(ctx: Context, a: argparse.Namespace) -> None:
+    review.reviewer_apply(
+        ctx.gh, ctx.settings, _io(ctx), _n(ctx, "PR"), head=a.sha, raw=_s(ctx, "OUT"), total=a.total, round_=a.round, qa=_qa_rules(ctx)
+    )  # fmt: skip
+
+
+@command("qa-guard", "is this QA run still worth doing, which round is it, and the URL to test (env: PR, HEAD_SHA, …)")
+def _qa_guard(ctx: Context, a: argparse.Namespace) -> None:
+    review.qa_guard(
+        ctx.gh, ctx.settings, _io(ctx), _n(ctx, "PR"), head=_s(ctx, "HEAD_SHA"), url_template=_s(ctx, "URL_TEMPLATE"),
+        local_url=_s(ctx, "LOCAL_URL") if _is(ctx, "LOCAL") else None, max_rounds=_n(ctx, "MAX_ROUNDS", 3),
+    )  # fmt: skip
+
+
+@command("qa-wait-checks", "wait for the required checks before QA (env: PR, AGENT_REQUIRED_CHECKS)")
+def _qa_wait_checks(ctx: Context, a: argparse.Namespace) -> None:
+    review.qa_wait_checks(ctx.gh, ctx.settings, _io(ctx), _n(ctx, "PR"), required_spec=_s(ctx, "AGENT_REQUIRED_CHECKS") or "CI")
+
+
+@command("qa-wait-preview", "wait for the preview of this commit (env: HEAD_SHA, URL, ENVIRONMENT)")
+def _qa_wait_preview(ctx: Context, a: argparse.Namespace) -> None:
+    review.qa_wait_preview(_io(ctx), ctx.gh, head=_s(ctx, "HEAD_SHA"), url=_s(ctx, "URL"), environment=_s(ctx, "ENVIRONMENT"))
+
+
+@command("qa-apply", "what QA's verdict leads to", arg("total", type=count), arg("round", type=count), arg("e2e", help="the e2e step's exit code, or none"))
+def _qa_apply(ctx: Context, a: argparse.Namespace) -> None:
+    run = review.QaRun(
+        ready=_is(ctx, "READY"), ci_result=_s(ctx, "CI_RESULT"), ci_failed=_s(ctx, "CI_FAILED"), url=_s(ctx, "URL"), local=_is(ctx, "LOCAL"), e2e_exit=a.e2e
+    )  # fmt: skip
+    review.qa_apply(ctx.gh, ctx.settings, _io(ctx), _n(ctx, "PR"), head=_s(ctx, "HEAD_SHA"), raw=_s(ctx, "OUT"), total=a.total, round_=a.round, run=run)
+
+
+@command("lead-guard", "the Lead's budget, and whether it may split (env: N, KIND, MAX_DECISIONS, AGENT_SPLIT, AGENT_MAX_SPLIT_DEPTH)")
+def _lead_guard(ctx: Context, a: argparse.Namespace) -> None:
+    review.lead_guard(
+        ctx.gh, ctx.settings, _io(ctx), _n(ctx, "N"), kind=_s(ctx, "KIND") or "issue", max_decisions=_n(ctx, "MAX_DECISIONS", 3),
+        split_enabled=config.flag(ctx.env, "AGENT_SPLIT", True), max_depth=_n(ctx, "AGENT_MAX_SPLIT_DEPTH", 2),
+    )  # fmt: skip
+
+
+@command("lead-apply", "carry out the Lead's decision (env: N, KIND, OUT, TOTAL, SPLIT)", arg("sha", nargs="?", default="", help="a PR's head"))
+def _lead_apply(ctx: Context, a: argparse.Namespace) -> None:
+    review.lead_apply(
+        ctx.gh, ctx.settings, _io(ctx), _n(ctx, "N"), kind=_s(ctx, "KIND") or "issue", raw=_s(ctx, "OUT"), total=_n(ctx, "TOTAL"), split=_s(ctx, "SPLIT"),
+        head=a.sha,
+    )  # fmt: skip
+
+
+def _approval(ctx: Context) -> review.Approval:
+    protected = _s(ctx, "PROTECTED") or ".github/,scripts/,templates/"
+    return review.Approval(
+        sender_type=_s(ctx, "SENDER_TYPE"), sender=_s(ctx, "SENDER"), high_risk_ok=_is(ctx, "HIGH_RISK_OK"),
+        protected=tuple(p.strip() for p in protected.split(",") if p.strip()),
+    )  # fmt: skip
+
+
+@command("merge-risk-gate", "may this approved PR join the merge queue without a human (env: PR, HEAD_SHA, SENDER_TYPE, …)")
+def _merge_risk_gate(ctx: Context, a: argparse.Namespace) -> None:
+    review.merge_risk_gate(ctx.gh, ctx.settings, _io(ctx), _n(ctx, "PR"), head=_s(ctx, "HEAD_SHA"), by=_approval(ctx))
+
+
+@command("merge-join", "admit an approved PR to the merge queue (env: PR, HEAD_SHA, SENDER_TYPE, BASE)")
+def _merge_join(ctx: Context, a: argparse.Namespace) -> None:
+    review.merge_join(ctx.gh, ctx.settings, _io(ctx), _n(ctx, "PR"), head=_s(ctx, "HEAD_SHA"), base=_s(ctx, "BASE"), sender_type=_s(ctx, "SENDER_TYPE"))
+
+
+@command("qa-start-app", "start the app on the runner and wait until it answers (env: START, URL)")
+def _qa_start_app(ctx: Context, a: argparse.Namespace) -> None:
+    qa_run.start_app(_io(ctx), _s(ctx, "START"), _s(ctx, "URL"))
+
+
+@command("qa-start-baseline", "start the base branch's checkout outside the workspace (env: START, URL, RUNNER_TEMP)")
+def _qa_start_baseline(ctx: Context, a: argparse.Namespace) -> None:
+    qa_run.start_baseline(_io(ctx), _s(ctx, "START"), _s(ctx, "URL"), _s(ctx, "RUNNER_TEMP") or "/tmp")
+
+
+@command("qa-find-baseline", "what QA compares the PR with (env: BASELINE_TEMPLATE, BASE, LOCAL_BASELINE)")
+def _qa_find_baseline(ctx: Context, a: argparse.Namespace) -> None:
+    qa_run.find_baseline(_io(ctx), ctx.gh, ctx.settings, template=_s(ctx, "BASELINE_TEMPLATE"), base=_s(ctx, "BASE"), local=_s(ctx, "LOCAL_BASELINE"))
+
+
+@command("qa-e2e-setup", "install what the e2e suite needs, unless there is none (env: E2E_SETUP, E2E_COMMAND)")
+def _qa_e2e_setup(ctx: Context, a: argparse.Namespace) -> int:
+    return qa_run.e2e_setup(_s(ctx, "E2E_COMMAND"), _s(ctx, "E2E_SETUP"))
+
+
+@command("qa-run-e2e", "run the e2e suite against the preview; its exit code is an output (env: E2E_COMMAND)")
+def _qa_run_e2e(ctx: Context, a: argparse.Namespace) -> None:
+    qa_run.run_e2e(_io(ctx), _s(ctx, "E2E_COMMAND"))
+
+
+@command("qa-publish-screenshots", "put QA's screenshots on gh-pages and show them on the PR (env: PR, OUT, KEEP_DAYS)", arg("round"))
+def _qa_publish_screenshots(ctx: Context, a: argparse.Namespace) -> None:
+    qa_run.publish_screenshots(
+        _io(ctx), ctx.gh, ctx.settings, pr=_n(ctx, "PR"), run_id=_s(ctx, "GITHUB_RUN_ID"), raw=_s(ctx, "OUT"), round_=a.round,
+        keep_days=_s(ctx, "KEEP_DAYS") or "7", token=_s(ctx, "GH_TOKEN"),
+    )  # fmt: skip
+
+
+@command("qa-link-screenshots", "list QA's screenshots on the PR with a link to the run artifact (env: PR, OUT, LINK)", arg("round"))
+def _qa_link_screenshots(ctx: Context, a: argparse.Namespace) -> None:
+    qa_run.link_screenshots(_io(ctx), ctx.gh, pr=_n(ctx, "PR"), raw=_s(ctx, "OUT"), round_=a.round, link=_s(ctx, "LINK"))
+
+
+@command("integrate-queue", "merge the queue, one PR at a time, within DRAIN_MINUTES (the Integrator workflow)")
+def _integrate_queue(ctx: Context, a: argparse.Namespace) -> None:
+    clock, io = SystemClock(), _io(ctx)
+    cache, token = ctx.env.get("AGENT_TOKEN_CACHE", ""), ctx.env.get("GH_TOKEN", "")
+    if cache:  # the token the job started with, for app-token to reuse while it's young
+        fd = os.open(cache, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(f"{int(clock.now())} {token}\n")
+
+    def log(line: str) -> None:
+        print(line, file=ctx.err, flush=True)
+
+    def refresh_token() -> None:
+        with contextlib.suppress(tokens.TokenError, OSError, KeyError, ValueError):
+            fresh = tokens.app_token(ctx.env, clock)
+            if fresh and isinstance(ctx.env, os._Environ):
+                os.environ["GH_TOKEN"] = fresh
+
+    cfg = integrator.Config.from_env(ctx.env, warn=log)
+    integrator.drain(
+        ctx.gh, ctx.settings, cfg, drain_minutes=_n(ctx, "DRAIN_MINUTES", 100), note=io.note, log=io.say, detail=log, clock=clock, refresh_token=refresh_token
+    )  # fmt: skip
 
 
 # --- setting a repository up (run by a person) ------------------------------------------------------------

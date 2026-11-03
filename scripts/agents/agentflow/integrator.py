@@ -237,20 +237,16 @@ class _Integration:
         if not self.required:
             self.log(f"#{self.pr}: no required check applies to the paths this PR changes")
             return "pass", ""
-        wanted = [w.strip() for w in self.required.split(",")]
         deadline = self.clock.now() + self.cfg.checks_minutes * 60
         seen = False
         while self.clock.now() < deadline:
             self.refresh_token()
             if not self.still_ours(sha, "agent:integrating"):
                 return "moved", ""
-            checks = [c for c in self.gh.pr_checks(self.pr) if c.workflow in wanted]
-            failed = ", ".join(f"[{c.name}]({c.link})" for c in checks if c.bucket in ("fail", "cancel"))
-            seen = seen or bool(checks)
-            if failed:
-                return "fail", failed
-            if checks and not any(c.bucket == "pending" for c in checks):
-                return "pass", ""
+            state, failed = prs.evaluate_checks(self.gh.pr_checks(self.pr), self.required)
+            seen = seen or state != "none"
+            if state in ("fail", "pass"):
+                return state, failed
             self.clock.sleep(30)
         return ("timeout" if seen else "missing"), ""
 
@@ -508,3 +504,47 @@ def integrate(
         except _Finish as f:
             return f.result
     raise AssertionError("the Integrator finished without a result")
+
+
+def drain(
+    gh: GitHub,
+    s: Settings,
+    cfg: Config,
+    *,
+    drain_minutes: int,
+    note: Callable[[str], None],
+    log: Callable[[str], None],
+    detail: Callable[[str], None] | None = None,
+    clock: Clock | None = None,
+    refresh_token: Callable[[], None] = lambda: None,
+) -> None:
+    """Merges the queue, one PR at a time, oldest first, each PR once per run: a PR sent to the back of
+    the queue is picked up by the next run. After `drain_minutes` the rest goes to a fresh run
+    (re-applying agent:queued starts one, and keeps the PR's place). `note` writes the job summary, `log`
+    the step's log, `detail` each PR's own log (the step's stderr; default: `log`)."""
+    clock = clock or SystemClock()
+    start = clock.now()
+    seen: set[int] = set()
+    note("### 🚦 Merge queue")
+    for line in queue.tidy(gh, s):  # queue labels left on PRs that are no longer open
+        note(line)
+    while True:
+        waiting = queue.order(gh, s)
+        nxt = next((n for n, _ in waiting if n not in seen), None)
+        if nxt is None:
+            rest = f" (the rest is for the next run: {' '.join(f'#{n}' for n, _ in waiting)})" if waiting else ""
+            note(f"Queue is empty{rest}.")
+            return
+        if clock.now() - start >= drain_minutes * 60:
+            log(transition(gh, s, nxt, "agent:queued"))
+            note(f"Time budget used, handed #{nxt} and the rest of the queue to a fresh run.")
+            return
+        seen.add(nxt)
+        refresh_token()
+        log("Queue: " + " ".join(f"#{n} ({state})" for n, state in waiting))
+        try:
+            outcome: str = integrate(gh, s, nxt, cfg, clock=clock, log=detail or log, refresh_token=refresh_token)
+        except Exception as e:  # one PR's crash must not stop the queue
+            (detail or log)(f"#{nxt}: crashed: {e!r}")
+            outcome = "error"
+        note(f"- #{nxt}: {outcome}")

@@ -122,6 +122,22 @@ class GitHub(ABC):
     def pr_checks(self, number: int) -> list[Check]: ...
 
     @abstractmethod
+    def close_pr(self, number: int) -> None:
+        """Closes a PR without merging it, and deletes its branch."""
+
+    @abstractmethod
+    def mark_ready(self, number: int) -> None:
+        """Turns a draft PR into one ready for review."""
+
+    @abstractmethod
+    def pr_stats(self, number: int) -> str:
+        """The size of a PR, as "+12/-3, 4 files" (with a minus sign)."""
+
+    @abstractmethod
+    def deployment_urls(self, sha: str, environment: str = "") -> list[str]:
+        """The URLs of this commit's deployments whose latest status is success (in `environment`, if set)."""
+
+    @abstractmethod
     def branch_head(self, branch: str) -> str:
         """The commit a branch points to."""
 
@@ -346,6 +362,30 @@ class GhCli(GitHub):
         except json.JSONDecodeError:
             rows = []
         return [Check(str(r.get("workflow") or ""), str(r.get("name") or ""), str(r.get("bucket") or ""), str(r.get("link") or "")) for r in rows]
+
+    def close_pr(self, number: int) -> None:
+        self._run(["pr", "close", str(number), "-R", self.repo, "--delete-branch"], None)
+
+    def mark_ready(self, number: int) -> None:
+        self._run(["pr", "ready", str(number), "-R", self.repo], None)
+
+    def pr_stats(self, number: int) -> str:
+        d = self._json(["pr", "view", str(number), "-R", self.repo, "--json", "additions,deletions,changedFiles"]) or {}
+        shown = {k: "null" if d.get(k) is None else d[k] for k in ("additions", "deletions", "changedFiles")}  # as jq prints a missing value
+        return f"+{shown['additions']}/−{shown['deletions']}, {shown['changedFiles']} files"
+
+    def deployment_urls(self, sha: str, environment: str = "") -> list[str]:
+        urls: list[str] = []
+        for d in self._json(["api", self._path("deployments") + f"?sha={sha}&per_page=30"]) or []:
+            if environment and d.get("environment") != environment:
+                continue
+            try:
+                latest = (self._json(["api", f"{d['statuses_url']}?per_page=1"]) or [{}])[0]
+            except GhError:
+                continue
+            if latest.get("state") == "success" and latest.get("environment_url"):
+                urls.append(str(latest["environment_url"]))
+        return urls
 
     def branch_head(self, branch: str) -> str:
         return str(((self._json(["api", self._path("branches", branch)]) or {}).get("commit") or {}).get("sha") or "")

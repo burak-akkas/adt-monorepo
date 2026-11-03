@@ -10,7 +10,7 @@ from agentflow import markers
 from agentflow.clock import Clock, SystemClock
 from agentflow.config import Settings
 from agentflow.github import GhError, GitHub
-from agentflow.model import PullRequest
+from agentflow.model import Check, PullRequest
 from agentflow.states import progress, transition
 
 APPROVED = re.compile(r"<!-- agent:approved-sha ([0-9a-f]{40}) -->")
@@ -120,6 +120,18 @@ def clean_base_update(gh: GitHub, s: Settings, pr: int, head: str) -> str | None
     if not (len(c.parents) == 2 and c.parents[0] == approved and c.author_id == s.bot and c.committer_login == "web-flow" and c.verified):
         return None
     return approved if gh.compare_status(c.parents[1], gh.pr(pr).base_ref) in ("identical", "ahead") else None
+
+
+def evaluate_checks(checks: list[Check], required: str) -> tuple[str, str]:
+    """(pass | fail | pending | none, the failed checks as links) for the required workflows among `checks`."""
+    wanted = [w.strip() for w in required.split(",")]
+    mine = [c for c in checks if c.workflow in wanted]
+    failed = ", ".join(f"[{c.name}]({c.link})" for c in mine if c.bucket in ("fail", "cancel"))
+    if failed:
+        return "fail", failed
+    if not mine:
+        return "none", ""
+    return ("pending" if any(c.bucket == "pending" for c in mine) else "pass"), ""
 
 
 # --- path rules (monorepos) ----------------------------------------------------------------------------
