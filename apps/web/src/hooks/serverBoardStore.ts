@@ -332,8 +332,11 @@ function selectBoard(id: string) {
   if (id === state.currentId || !state.boards.some((b) => b.id === id)) {
     return;
   }
-  beginSwitch();
+  // The call takes the queue of the board being left; then the chosen board becomes the current one at once
+  // (the URL and the select follow), and its content is shown when it has loaded.
   void boardCall(() => switchTo(id));
+  storeId(id);
+  setState({ currentId: id, status: "loading" });
 }
 
 function importBoardFile(board: Board, name: string) {

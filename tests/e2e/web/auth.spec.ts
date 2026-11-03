@@ -6,8 +6,6 @@ const INVALID_LOGIN = "Invalid email or password.";
 
 const uniqueEmail = () => `e2e-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.test`;
 
-const accountNav = (page: Page) => page.getByRole("navigation", { name: "Account" });
-
 // Next.js adds its own role="alert" route announcer, so scope to the form's message.
 const formAlert = (page: Page) => page.locator("form").getByRole("alert");
 

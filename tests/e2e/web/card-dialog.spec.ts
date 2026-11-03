@@ -22,7 +22,7 @@ test("edits every field in the dialog, saves, and persists", async ({ page }) =>
 
   await dialog.getByLabel("Title").fill("Plan holiday");
   await dialog.getByLabel("Description").fill("Book flights\nPack bags");
-  await dialog.getByLabel("Status").selectOption("doing");
+  await dialog.getByLabel("Status").selectOption({ label: "Doing" });
   await dialog.getByLabel("Priority").selectOption("high");
   await dialog.getByLabel("Due date").fill("2031-05-06");
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
@@ -38,7 +38,7 @@ test("edits every field in the dialog, saves, and persists", async ({ page }) =>
   await page.getByRole("button", { name: "Plan holiday", exact: true }).click();
   const reopened = page.getByRole("dialog", { name: "Plan holiday" });
   await expect(reopened.getByLabel("Description")).toHaveValue("Book flights\nPack bags");
-  await expect(reopened.getByLabel("Status")).toHaveValue("doing");
+  await expect(reopened.getByLabel("Status").locator("option:checked")).toHaveText("Doing");
   await expect(reopened.getByLabel("Due date")).toHaveValue("2031-05-06");
 
   await reopened.getByRole("button", { name: "Clear due date" }).click();

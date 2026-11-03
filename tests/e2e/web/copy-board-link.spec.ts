@@ -22,9 +22,10 @@ test("copies the link of the current board and follows the selected board", asyn
   await page.getByRole("menuitem", { name: "New board" }).click();
   await page.getByLabel("Board name").fill("Work");
   await page.getByRole("button", { name: "Create" }).click();
-  await expect(page.getByRole("combobox", { name: "Board" })).toHaveValue(/.+/);
+  // The new board is created on the server first, then opened.
+  await expect(page.getByRole("combobox", { name: "Board" }).locator("option:checked")).toHaveText("Work");
 
   const second = await copyLink(page);
-  expect(second).toBe(page.url());
+  await expect.poll(() => page.url()).toBe(second);
   expect(second).not.toBe(first);
 });
