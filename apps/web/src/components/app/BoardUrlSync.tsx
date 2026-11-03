@@ -12,7 +12,7 @@ const boardUrl = boardQuery;
 // Keeps ?board=<id> and the current board in sync. The URL is only read in effects after hydration,
 // so the static render and the first client render match. Relative URLs work under any sub-path.
 export function BoardUrlSync() {
-  const { boards, currentId, selectBoard } = useBoards();
+  const { boards, currentId, selectBoard, ready: loaded } = useBoards();
   const hydrated = useSyncExternalStore(noopSubscribe, () => true, () => false);
   const ready = useRef(false);
   const latest = useRef({ boards, currentId, selectBoard });
@@ -30,8 +30,9 @@ export function BoardUrlSync() {
   }, [currentId]);
 
   // Initial load: the URL wins, otherwise the remembered board. Replace, so no extra history entry.
+  // Boards from the server are not known until they have loaded: an unknown id is only invalid after that.
   useEffect(() => {
-    if (!hydrated) {
+    if (!hydrated || !loaded || ready.current) {
       return;
     }
     const { boards, currentId, selectBoard } = latest.current;
@@ -39,7 +40,7 @@ export function BoardUrlSync() {
     selectBoard(id);
     window.history.replaceState(null, "", boardUrl(id));
     ready.current = true;
-  }, [hydrated]);
+  }, [hydrated, loaded]);
 
   // Back and forward: URL to store.
   useEffect(() => {

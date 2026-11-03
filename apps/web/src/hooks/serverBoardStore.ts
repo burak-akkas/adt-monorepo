@@ -1,0 +1,335 @@
+"use client";
+
+import { boardDetailSchema, boardSummarySchema, DEFAULT_BOARD_NAME, type BoardDetail, type BoardSummary } from "@adt/contracts";
+import { useSyncExternalStore } from "react";
+import { z } from "zod";
+import { apiRequest, importBoard } from "@/lib/api-client";
+import type { Board } from "@/lib/board";
+import { detailToBoard } from "@/lib/boardDetail";
+import { diffBoard, runOperations } from "@/lib/boardSync";
+import { currentEntry, initialBoardList, validateBoardName, type NameResult } from "@/lib/boards";
+import { toImportRequest } from "@/lib/localImport";
+
+// The board store over the API. The shown board is updated at once; the changes are sent in order, one queue per board.
+// A failed save puts the saved version back and says so.
+
+export const CURRENT_BOARD_STORAGE_KEY = "kanban-current-board-v1";
+export const SAVE_ERROR_PREFIX = "Could not save, the board was reset to the saved version.";
+const RELOAD_ERROR = "Could not load your boards. Reload the page to try again.";
+
+type Status = "loading" | "ready" | "error";
+
+interface State {
+  boards: { id: string; name: string }[];
+  currentId: string;
+  board: Board;
+  status: Status;
+  error: string | null;
+}
+
+const LOADING = initialBoardList("server");
+const INITIAL: State = {
+  boards: LOADING.boards.map(({ id, name }) => ({ id, name })),
+  currentId: LOADING.currentId,
+  board: currentEntry(LOADING).board,
+  status: "loading",
+  error: null,
+};
+
+let state: State = INITIAL;
+let started = false;
+const listeners = new Set<() => void>();
+
+function setState(patch: Partial<State>) {
+  state = { ...state, ...patch };
+  listeners.forEach((listener) => listener());
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  void start();
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+const getSnapshot = () => state;
+const getServerSnapshot = () => INITIAL;
+
+interface Queue {
+  chain: Promise<void>;
+  pending: number;
+  // Bumped when a save fails: jobs queued before that are skipped.
+  generation: number;
+  // client id -> server id, for what this board made up since its last refetch.
+  ids: Map<string, string>;
+}
+
+const queues = new Map<string, Queue>();
+
+function queueFor(boardId: string): Queue {
+  let queue = queues.get(boardId);
+  if (!queue) {
+    queue = { chain: Promise.resolve(), pending: 0, generation: 0, ids: new Map() };
+    queues.set(boardId, queue);
+  }
+  return queue;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : "Unknown error.";
+}
+
+function saveFailure(error: unknown): string {
+  return `${SAVE_ERROR_PREFIX} ${messageOf(error)}`;
+}
+
+function readStoredId(): string | null {
+  try {
+    return localStorage.getItem(CURRENT_BOARD_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeId(id: string) {
+  try {
+    localStorage.setItem(CURRENT_BOARD_STORAGE_KEY, id);
+  } catch {
+    // A preference only: the first board is chosen next time.
+  }
+}
+
+const fetchList = () => apiRequest("/boards", { schema: z.array(boardSummarySchema) });
+const fetchDetail = (id: string) => apiRequest(`/boards/${encodeURIComponent(id)}`, { schema: boardDetailSchema });
+
+const summaries = (boards: BoardSummary[]) => boards.map(({ id, name }) => ({ id, name }));
+
+// Shows a fetched board if it is still the one being looked at.
+function showDetail(detail: BoardDetail) {
+  if (detail.id === state.currentId) {
+    queueFor(detail.id).ids.clear();
+    setState({ board: detailToBoard(detail) });
+  }
+}
+
+async function loadAll(preferredId: string | null, name: string | null = null) {
+  let list = await fetchList();
+  if (list.length === 0) {
+    list = [await apiRequest("/boards", { method: "POST", body: { name: name ?? DEFAULT_BOARD_NAME }, schema: boardSummarySchema })];
+  }
+  const id = list.find((b) => b.id === preferredId)?.id ?? list[0].id;
+  const detail = await fetchDetail(id);
+  storeId(id);
+  state = { ...state, boards: summaries(list), currentId: id };
+  queueFor(id).ids.clear();
+  setState({ board: detailToBoard(detail), status: "ready", error: null });
+}
+
+function start(): Promise<void> {
+  if (started) {
+    return Promise.resolve();
+  }
+  started = true;
+  return loadAll(readStoredId()).catch((error: unknown) => {
+    setState({ status: "error", error: `${RELOAD_ERROR} ${messageOf(error)}` });
+  });
+}
+
+// After a failure anywhere: show what the server has, with a message. Never silent.
+async function recover(error: unknown, boardId: string) {
+  const queue = queueFor(boardId);
+  queue.generation++;
+  const message = saveFailure(error);
+  try {
+    const list = await fetchList();
+    const id = list.some((b) => b.id === state.currentId) ? state.currentId : (list[0]?.id ?? state.currentId);
+    const detail = await fetchDetail(id);
+    state = { ...state, boards: summaries(list), currentId: id };
+    storeId(id);
+    queueFor(id).ids.clear();
+    setState({ board: detailToBoard(detail), error: message });
+  } catch (refetchError) {
+    setState({ status: "error", error: `${message} ${RELOAD_ERROR} ${messageOf(refetchError)}` });
+  } finally {
+    // Changes made while the refetch ran were built on a board that is gone.
+    queue.generation++;
+  }
+}
+
+function enqueue(boardId: string, job: () => Promise<void>) {
+  const queue = queueFor(boardId);
+  const generation = queue.generation;
+  queue.pending++;
+  queue.chain = queue.chain.then(async () => {
+    try {
+      if (generation !== queue.generation) {
+        return;
+      }
+      await job();
+      // Creates left client ids behind: once nothing else is queued, swap in the server's board.
+      if (queue.ids.size > 0 && queue.pending === 1 && boardId === state.currentId) {
+        const detail = await fetchDetail(boardId);
+        if (queue.pending === 1) {
+          showDetail(detail);
+        }
+      }
+    } catch (error) {
+      await recover(error, boardId);
+    } finally {
+      queue.pending--;
+    }
+  });
+}
+
+function update(change: (board: Board) => Board) {
+  const boardId = state.currentId;
+  if (state.status !== "ready") {
+    return;
+  }
+  const prev = state.board;
+  const next = change(prev);
+  if (next === prev) {
+    return;
+  }
+  setState({ board: next });
+  const queue = queueFor(boardId);
+  let operations;
+  try {
+    operations = diffBoard(prev, next);
+  } catch (error) {
+    // Cannot be sent: same path as a failed save, after what is queued has run.
+    enqueue(boardId, () => Promise.reject(error));
+    return;
+  }
+  if (operations.length === 0) {
+    return;
+  }
+  enqueue(boardId, () => runOperations(operations, { boardId, ids: queue.ids }));
+}
+
+// Board-level calls go through the board's own queue, so they run after its pending saves.
+async function boardCall(work: () => Promise<void>) {
+  const boardId = state.currentId;
+  const queue = queueFor(boardId);
+  const run = queue.chain.then(work);
+  queue.chain = run.catch(() => undefined);
+  try {
+    await run;
+  } catch (error) {
+    await recover(error, boardId);
+  }
+}
+
+async function switchTo(id: string) {
+  const detail = await fetchDetail(id);
+  storeId(id);
+  state = { ...state, currentId: id };
+  queueFor(id).ids.clear();
+  setState({ board: detailToBoard(detail), error: null });
+}
+
+function addBoard(summary: BoardSummary) {
+  state = { ...state, boards: [...state.boards, { id: summary.id, name: summary.name }] };
+}
+
+function createBoard(name: string): NameResult {
+  const result = validateBoardName(name, state.boards);
+  if (result.ok) {
+    void boardCall(async () => {
+      const created = await apiRequest("/boards", { method: "POST", body: { name: result.name }, schema: boardSummarySchema });
+      addBoard(created);
+      await switchTo(created.id);
+    });
+  }
+  return result;
+}
+
+function renameBoard(id: string, name: string): NameResult {
+  const result = validateBoardName(name, state.boards, id);
+  if (result.ok) {
+    setState({ boards: state.boards.map((b) => (b.id === id ? { ...b, name: result.name } : b)) });
+    void boardCall(async () => {
+      await apiRequest(`/boards/${encodeURIComponent(id)}`, { method: "PATCH", body: { name: result.name } });
+    });
+  }
+  return result;
+}
+
+function duplicateBoard() {
+  const id = state.currentId;
+  void boardCall(async () => {
+    const copy = await apiRequest(`/boards/${encodeURIComponent(id)}/duplicate`, { method: "POST", schema: boardSummarySchema });
+    addBoard(copy);
+    await switchTo(copy.id);
+  });
+}
+
+function deleteBoard(id: string) {
+  if (state.boards.length <= 1 || !state.boards.some((b) => b.id === id)) {
+    return;
+  }
+  const index = state.boards.findIndex((b) => b.id === id);
+  const remaining = state.boards.filter((b) => b.id !== id);
+  const wasCurrent = id === state.currentId;
+  const neighbour = remaining[Math.min(index, remaining.length - 1)];
+  setState({ boards: remaining });
+  void boardCall(async () => {
+    await apiRequest(`/boards/${encodeURIComponent(id)}`, { method: "DELETE" });
+    queues.delete(id);
+    if (wasCurrent) {
+      await switchTo(neighbour.id);
+    }
+  });
+}
+
+function selectBoard(id: string) {
+  if (id === state.currentId || !state.boards.some((b) => b.id === id)) {
+    return;
+  }
+  void boardCall(() => switchTo(id));
+}
+
+function importBoardFile(board: Board, name: string) {
+  void boardCall(async () => {
+    const { board: detail } = await importBoard(toImportRequest({ id: "import", name, board }, globalThis.crypto.randomUUID()));
+    addBoard(detail);
+    await switchTo(detail.id);
+  });
+}
+
+function dismissError() {
+  setState({ error: null });
+}
+
+export function useServerBoard() {
+  const current = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  return [current.board, update] as const;
+}
+
+export function useServerBoards() {
+  const current = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  return {
+    boards: current.boards,
+    currentId: current.currentId,
+    ready: current.status === "ready",
+    createBoard,
+    renameBoard,
+    duplicateBoard,
+    deleteBoard,
+    selectBoard,
+    importBoardFile,
+  };
+}
+
+export function useServerSaveError() {
+  const current = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  return { error: current.error, dismiss: dismissError };
+}
+
+// Tests only: forget everything so the next hook starts a fresh load.
+export function resetServerBoardStore() {
+  state = INITIAL;
+  started = false;
+  queues.clear();
+}

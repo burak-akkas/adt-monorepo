@@ -3,7 +3,8 @@
 import { useRef, useState, type ChangeEvent } from "react";
 import { boardLists, listCards, type Board } from "@/lib/board";
 import { exportFilename, parseBoard, serializeBoard } from "@/lib/storage";
-import { useBoard } from "@/hooks/useBoard";
+import { MAX_BOARD_NAME_LENGTH } from "@/lib/boards";
+import { useBoard, useBoards } from "@/hooks/useBoard";
 
 import { Button } from "@/components/ui";
 
@@ -25,7 +26,9 @@ function readFile(file: File): Promise<string> {
 
 export function BoardTransfer() {
   const [board, update] = useBoard();
+  const { importBoardFile } = useBoards();
   const [pending, setPending] = useState<Board | null>(null);
+  const [importName, setImportName] = useState("Imported board");
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const importButton = useRef<HTMLButtonElement>(null);
@@ -60,6 +63,7 @@ export function BoardTransfer() {
     const result = parseBoard(text);
     if (result.ok) {
       setError(null);
+      setImportName(file.name.replace(/\.json$/i, "").trim().slice(0, MAX_BOARD_NAME_LENGTH).trim() || "Imported board");
       setPending(result.board);
       // Wait for the panel to render, then focus the safe choice.
       setTimeout(() => cancelButton.current?.focus(), 0);
@@ -76,7 +80,11 @@ export function BoardTransfer() {
 
   function confirmReplace() {
     if (pending) {
-      update(() => pending);
+      if (importBoardFile) {
+        importBoardFile(pending, importName);
+      } else {
+        update(() => pending);
+      }
     }
     closeConfirmation();
   }
@@ -115,11 +123,13 @@ export function BoardTransfer() {
           className="max-w-full rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
         >
           <p id="import-confirm-text">
-            Replace the current board with the imported one ({countCards(pending)} {countCards(pending) === 1 ? "card" : "cards"})? This cannot be undone.
+            {importBoardFile
+              ? `Add the imported board (${countCards(pending)} ${countCards(pending) === 1 ? "card" : "cards"})?`
+              : `Replace the current board with the imported one (${countCards(pending)} ${countCards(pending) === 1 ? "card" : "cards"})? This cannot be undone.`}
           </p>
           <div className="mt-2 flex gap-2">
             <Button size="sm" onClick={confirmReplace}>
-              Replace
+              {importBoardFile ? "Add" : "Replace"}
             </Button>
             <Button size="sm" ref={cancelButton} onClick={closeConfirmation}>
               Cancel

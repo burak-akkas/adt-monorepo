@@ -53,6 +53,7 @@ import { SearchBox } from "./SearchBox";
 import { SummaryBar } from "./SummaryBar";
 import { TableView } from "@/components/views/TableView";
 import { TemplatesPanel } from "@/components/panels/TemplatesPanel";
+import { SaveErrorToast } from "@/components/app/SaveErrorToast";
 import { UndoToast } from "./UndoToast";
 import { ViewSwitch } from "@/components/views/ViewSwitch";
 import { ArchiveIcon, Button, SortIcon } from "@/components/ui";
@@ -322,6 +323,7 @@ export function Board() {
       )}
 
       {undo && <UndoToast message={undo.message} onUndo={undoLastArchive} onDismiss={dismissUndo} />}
+      <SaveErrorToast />
 
       {view === "table" ? (
         <TableView board={visible} onOpen={setOpenCardId} />
