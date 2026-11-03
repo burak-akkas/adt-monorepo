@@ -139,9 +139,9 @@ describe("ArchiveService", () => {
     await archive.archive(single.id, alice);
     expect(await types(single.id)).toEqual(["archived"]);
 
-    await lists.archiveCards(doing.id, alice);
+    await lists.archiveCards(doing.id, alice, emails[0]);
     for (const card of doingCards) expect(await types(card.id)).toEqual(["archived"]);
-    expect(await lists.archiveCards(doing.id, alice)).toEqual([]);
+    expect(await lists.archiveCards(doing.id, alice, emails[0])).toEqual([]);
 
     await archive.archiveDone(board.id, alice);
     for (const card of doneCards) expect(await types(card.id)).toEqual(["archived"]);
@@ -210,10 +210,10 @@ describe("ArchiveService", () => {
     const [a] = await addCards(board.lists[0].id, ["a", "b"]);
     await archive.archive(a.id, alice);
 
-    const detail = boardDetailSchema.parse(await boards.get(board.id, alice));
+    const detail = boardDetailSchema.parse(await boards.get(board.id, alice, emails[0]));
     expect(detail.lists[0].cards.map((card) => card.title)).toEqual(["b"]);
     expect(detail.archive.map((card) => card.title)).toEqual(["a"]);
-    await expect(boards.get(board.id, bob)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(boards.get(board.id, bob, emails[1])).rejects.toBeInstanceOf(NotFoundException);
 
     await expect(cards.get(a.id, alice)).rejects.toBeInstanceOf(NotFoundException);
     await expect(cards.update(a.id, alice, { title: "x" })).rejects.toBeInstanceOf(NotFoundException);
@@ -228,7 +228,7 @@ describe("ArchiveService", () => {
     const [a, b] = await addCards(todo.id, ["a", "b"]);
     await archive.archive(a.id, alice);
 
-    await lists.remove(todo.id, alice, doing.id);
+    await lists.remove(todo.id, alice, emails[0], doing.id);
     expect(await prisma.boardList.findUnique({ where: { id: todo.id } })).toBeNull();
     expect((await archive.list(board.id, alice)).map((card) => card.title)).toEqual(["a"]);
     expect(await inList(doing.id)).toEqual([["b", 0]]);
@@ -245,7 +245,7 @@ describe("ArchiveService", () => {
     await archive.archive(a.id, alice);
 
     const copy = await boards.duplicate(board.id, alice);
-    const detail = await boards.get(copy.id, alice);
+    const detail = await boards.get(copy.id, alice, emails[0]);
     expect(detail.archive).toEqual([]);
     expect(detail.lists[0].cards.map((card) => card.title)).toEqual(["live"]);
     expect(await prisma.card.count({ where: { boardId: copy.id } })).toBe(0);

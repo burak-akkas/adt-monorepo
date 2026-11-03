@@ -4,6 +4,7 @@ import { recordActivity } from "../cards/activity.js";
 import { cardDetails, toArchivedCard, toCard } from "../cards/card.mapper.js";
 import { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
+import { boardAccessWhere } from "../boards/board-access.js";
 
 type ListRow = Prisma.BoardListGetPayload<object>;
 
@@ -28,18 +29,18 @@ const nameTaken = () => new ConflictException("A list with this name already exi
 export class ListsService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
-  /** Loads a board only together with its owner, so another user's board is simply not found. */
-  private async findOwnedBoard(tx: Prisma.TransactionClient, boardId: string, userId: string) {
-    const board = await tx.board.findFirst({ where: { id: boardId, userId } });
+  /** Loads a board only if the user owns it or is a member, so any other board is simply not found. */
+  private async findOwnedBoard(tx: Prisma.TransactionClient, boardId: string, userId: string, email: string) {
+    const board = await tx.board.findFirst({ where: { id: boardId, ...boardAccessWhere(userId, email) } });
     if (!board) {
       throw new NotFoundException("Board not found");
     }
     return board;
   }
 
-  /** Loads a list only through its board's owner. */
-  private async findOwnedList(tx: Prisma.TransactionClient, id: string, userId: string): Promise<ListRow> {
-    const list = await tx.boardList.findFirst({ where: { id, board: { userId } } });
+  /** Loads a list only through a board the user owns or is a member of. */
+  private async findOwnedList(tx: Prisma.TransactionClient, id: string, userId: string, email: string): Promise<ListRow> {
+    const list = await tx.boardList.findFirst({ where: { id, board: boardAccessWhere(userId, email) } });
     if (!list) {
       throw new NotFoundException("List not found");
     }
@@ -63,10 +64,10 @@ export class ListsService {
     }
   }
 
-  async create(boardId: string, userId: string, name: string): Promise<ListResponse> {
+  async create(boardId: string, userId: string, email: string, name: string): Promise<ListResponse> {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        await this.findOwnedBoard(tx, boardId, userId);
+        await this.findOwnedBoard(tx, boardId, userId, email);
         await this.assertNameFree(tx, boardId, name);
         const position = await tx.boardList.count({ where: { boardId } });
         return toResponse(await tx.boardList.create({ data: { boardId, name, position } }));
@@ -77,10 +78,10 @@ export class ListsService {
     }
   }
 
-  async rename(id: string, userId: string, name: string): Promise<ListResponse> {
+  async rename(id: string, userId: string, email: string, name: string): Promise<ListResponse> {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const list = await this.findOwnedList(tx, id, userId);
+        const list = await this.findOwnedList(tx, id, userId, email);
         await this.assertNameFree(tx, list.boardId, name, id);
         return toResponse(await tx.boardList.update({ where: { id }, data: { name } }));
       });
@@ -91,15 +92,15 @@ export class ListsService {
   }
 
   /** Sets the list's WIP limit; `null` removes it. */
-  async setWipLimit(id: string, userId: string, limit: number | null): Promise<ListResponse> {
-    await this.findOwnedList(this.prisma, id, userId);
+  async setWipLimit(id: string, userId: string, email: string, limit: number | null): Promise<ListResponse> {
+    await this.findOwnedList(this.prisma, id, userId, email);
     return toResponse(await this.prisma.boardList.update({ where: { id }, data: { wipLimit: limit } }));
   }
 
   /** Moves a list to `position` (clamped to the end) and returns the board's lists in order. */
-  async move(id: string, userId: string, position: number): Promise<ListResponse[]> {
+  async move(id: string, userId: string, email: string, position: number): Promise<ListResponse[]> {
     return this.prisma.$transaction(async (tx) => {
-      const list = await this.findOwnedList(tx, id, userId);
+      const list = await this.findOwnedList(tx, id, userId, email);
       const siblings = await tx.boardList.findMany({ where: { boardId: list.boardId }, orderBy: { position: "asc" } });
       const rest = siblings.filter((l) => l.id !== id);
       rest.splice(Math.min(position, rest.length), 0, list);
@@ -110,9 +111,9 @@ export class ListsService {
   }
 
   /** Puts the list's live cards in the given order. `cardIds` must be exactly the list's cards, each once. */
-  async reorderCards(id: string, userId: string, cardIds: string[]): Promise<CardResponse[]> {
+  async reorderCards(id: string, userId: string, email: string, cardIds: string[]): Promise<CardResponse[]> {
     return this.prisma.$transaction(async (tx) => {
-      await this.findOwnedList(tx, id, userId);
+      await this.findOwnedList(tx, id, userId, email);
       const cards = await tx.card.findMany({ where: { listId: id }, select: { id: true, position: true } });
       const own = new Set(cards.map((card) => card.id));
       if (cardIds.length !== own.size || new Set(cardIds).size !== cardIds.length || !cardIds.every((cardId) => own.has(cardId))) {
@@ -130,9 +131,9 @@ export class ListsService {
   }
 
   /** Archives every card of the list, in list order (oldest archived first), and returns them. */
-  async archiveCards(id: string, userId: string): Promise<ArchivedCard[]> {
+  async archiveCards(id: string, userId: string, email: string): Promise<ArchivedCard[]> {
     return this.prisma.$transaction(async (tx) => {
-      const list = await this.findOwnedList(tx, id, userId);
+      const list = await this.findOwnedList(tx, id, userId, email);
       const cards = await tx.card.findMany({ where: { listId: id }, orderBy: { position: "asc" }, select: { id: true } });
       if (cards.length === 0) return [];
       // Strictly increasing timestamps keep "oldest first" in list order.
@@ -151,9 +152,9 @@ export class ListsService {
     });
   }
 
-  async remove(id: string, userId: string, moveTo?: string): Promise<void> {
+  async remove(id: string, userId: string, email: string, moveTo?: string): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
-      const list = await this.findOwnedList(tx, id, userId);
+      const list = await this.findOwnedList(tx, id, userId, email);
       const siblings = await tx.boardList.findMany({ where: { boardId: list.boardId }, orderBy: { position: "asc" } });
       if (siblings.length <= 1) {
         throw new ConflictException("Cannot delete the last list of a board");
