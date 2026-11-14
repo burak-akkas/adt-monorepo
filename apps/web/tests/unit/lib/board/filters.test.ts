@@ -6,6 +6,7 @@ import {
   filterCards,
   filterOverdue,
   isFiltering,
+  listDueTodayCount,
   listOverdueCount,
   moveCard,
   setDueDate,
@@ -95,6 +96,24 @@ describe("boardStats / filterOverdue", () => {
     expect(listOverdueCount(b, "doing", TODAY)).toBe(0);
     expect(listOverdueCount(b, "done", TODAY)).toBe(0);
     expect(listOverdueCount(emptyBoard(), "todo", TODAY)).toBe(0);
+  });
+
+  it("counts cards due today per list, excluding overdue, tomorrow, undated and the done list", () => {
+    let b = emptyBoard();
+    for (const id of ["a", "b", "c", "d", "e"]) {
+      b = addCard(b, `Card ${id}`, { id });
+    }
+    b = setDueDate(b, "a", "2026-10-28");
+    b = setDueDate(b, "b", "2026-10-28");
+    b = setDueDate(b, "c", "2026-10-27"); // overdue
+    b = setDueDate(b, "d", "2026-10-29"); // tomorrow
+    b = moveCard(b, "e", "done");
+    b = setDueDate(b, "e", "2026-10-28");
+    expect(listDueTodayCount(b, "todo", TODAY)).toBe(2);
+    expect(listOverdueCount(b, "todo", TODAY)).toBe(1);
+    expect(listDueTodayCount(b, "doing", TODAY)).toBe(0);
+    expect(listDueTodayCount(b, "done", TODAY)).toBe(0);
+    expect(listDueTodayCount(emptyBoard(), "todo", TODAY)).toBe(0);
   });
 
   it("keeps only overdue, not-done cards and does not mutate", () => {

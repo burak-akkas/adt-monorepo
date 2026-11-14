@@ -16,6 +16,8 @@ interface ColumnHeaderProps {
   role?: "doing" | "done";
   // The real number of overdue cards in the column; the badge is hidden at 0.
   overdue?: number;
+  // The real number of cards due today in the column; the badge is hidden at 0.
+  dueToday?: number;
   children?: ReactNode;
 }
 
@@ -28,6 +30,7 @@ export function ColumnHeader({
   onToggleCollapsed,
   role,
   overdue = 0,
+  dueToday = 0,
   children,
 }: ColumnHeaderProps) {
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -65,6 +68,12 @@ export function ColumnHeader({
     </span>
   );
 
+  const dueTodayBadge = dueToday > 0 && (
+    <span className="rounded-full bg-amber-100 px-2 text-xs font-medium text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+      {dueToday} due today
+    </span>
+  );
+
   const toggleLabel =`${collapsed ? "Expand" : "Collapse"} ${title}`;
   const toggleButton = (
     <Button
@@ -93,6 +102,7 @@ export function ColumnHeader({
           </span>
         </h2>
         {overdueBadge}
+        {dueTodayBadge}
         {roleMarker}
         {toggleButton}
       </div>
@@ -109,6 +119,7 @@ export function ColumnHeader({
           </span>
         </h2>
         {overdueBadge}
+        {dueTodayBadge}
         {roleMarker}
         {status.state === "at" && (
           <span className="text-xs font-medium text-amber-800 dark:text-amber-300">At limit</span>

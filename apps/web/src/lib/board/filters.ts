@@ -1,4 +1,4 @@
-import { isOverdue, todayString } from "./dates";
+import { dueStatus, isOverdue, todayString } from "./dates";
 import { boardLists, insightsListIds, listCards, mapLists } from "./lists";
 import type { Board, BoardStats } from "./types";
 
@@ -39,6 +39,12 @@ export function boardStats(board: Board, today: string = todayString()): BoardSt
 export function listOverdueCount(board: Board, listId: string, today: string = todayString()): number {
   const doneId = insightsListIds(board).done ?? null;
   return listCards(board, listId).filter((c) => isOverdue(c, listId, today, doneId)).length;
+}
+
+// How many cards in one list are due today (always 0 for the done list; overdue cards are not counted).
+export function listDueTodayCount(board: Board, listId: string, today: string = todayString()): number {
+  const doneId = insightsListIds(board).done ?? null;
+  return listCards(board, listId).filter((c) => dueStatus(c, listId, today, doneId) === "today").length;
 }
 
 // Only the overdue cards (due before today, not in the done list).

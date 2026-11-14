@@ -4,6 +4,9 @@ import { editCard, moveCardTo } from "../../support/cardActions";
 
 const column = (page: Page, name: string) => page.getByRole("region", { name: new RegExp(`^${name}`) });
 
+// The card chip reads "⏰ Due today" (icon first). The header badge "N due today" must not match.
+const dueTodayChip = /^\W*Due today$/;
+
 test.beforeEach(async ({ page }) => {
   await page.goto("./");
   await expect(page.getByRole("heading", { level: 1, name: "Kanban" })).toBeVisible();
@@ -48,15 +51,15 @@ test("shows due today and due tomorrow chips, but none for later dates or the do
   });
 
   await editCard(page, "Soon", { dueDate: today });
-  await expect(column(page, "To do").getByText("Due today")).toBeVisible();
+  await expect(column(page, "To do").getByText(dueTodayChip)).toBeVisible();
   await editCard(page, "Soon", { dueDate: tomorrow });
   await expect(column(page, "To do").getByText("Due tomorrow")).toBeVisible();
-  await expect(column(page, "To do").getByText("Due today")).toHaveCount(0);
+  await expect(column(page, "To do").getByText(dueTodayChip)).toHaveCount(0);
   await editCard(page, "Soon", { dueDate: later });
-  await expect(column(page, "To do").getByText(/^Due (today|tomorrow)$/)).toHaveCount(0);
+  await expect(column(page, "To do").getByText(/^\W*Due (today|tomorrow)$/)).toHaveCount(0);
 
   await editCard(page, "Soon", { dueDate: today, list: "Done" });
-  await expect(column(page, "Done").getByText("Due today")).toHaveCount(0);
+  await expect(column(page, "Done").getByText(dueTodayChip)).toHaveCount(0);
 });
 
 test("quick due date buttons set the due date in the dialog", async ({ page }) => {
