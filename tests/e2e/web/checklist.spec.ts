@@ -17,7 +17,7 @@ test("manages a checklist, shows progress and persists it", async ({ page }) => 
     await input.fill(text);
     await input.press("Enter");
   }
-  await expect(dialog.getByRole("checkbox")).toHaveCount(3);
+  await expect(dialog.getByRole("list", { name: "Checklist items" }).getByRole("checkbox")).toHaveCount(3);
 
   await dialog.getByRole("checkbox", { name: "Write" }).check();
   await dialog.getByRole("button", { name: 'Move up "Deploy"' }).click();
@@ -27,7 +27,7 @@ test("manages a checklist, shows progress and persists it", async ({ page }) => 
   await dialog.getByLabel('Edit checklist item "Test"').fill("Test well");
   await dialog.getByRole("button", { name: "Save item" }).click();
   await dialog.getByRole("button", { name: 'Delete checklist item "Deploy"' }).click();
-  await expect(dialog.getByRole("checkbox")).toHaveCount(2);
+  await expect(dialog.getByRole("list", { name: "Checklist items" }).getByRole("checkbox")).toHaveCount(2);
 
   await dialog.getByRole("button", { name: "Cancel" }).click();
   const badge = page.getByRole("img", { name: "1 of 2 checklist items done" });

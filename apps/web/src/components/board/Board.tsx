@@ -10,9 +10,11 @@ import {
   boardLists,
   boardStats,
   boardView,
+  countAssignedTo,
   deleteArchived,
   deleteCard,
   duplicateCard,
+  filterAssignedTo,
   filterByLabel,
   filterCards,
   filterDueToday,
@@ -40,6 +42,7 @@ import {
 import { cardToText } from "@/lib/cardText";
 import { addCardFromTemplate, boardTemplates, saveAsTemplate } from "@/lib/templates";
 import { useBackgroundImageOk } from "@/hooks/useBackgroundImageOk";
+import { useAuth } from "@/hooks/useAuth";
 import { useBoard, useBoards } from "@/hooks/useBoard";
 import { useSummaryCollapsed } from "@/hooks/useSummaryCollapsed";
 import { AddCardForm } from "./AddCardForm";
@@ -76,6 +79,9 @@ export function Board() {
 
 function BoardContent() {
   const [board, update] = useBoard();
+  const { currentId } = useBoards();
+  const { user } = useAuth();
+  const me = user?.email.toLowerCase() ?? null;
   const [query, setQuery] = useState("");
   const [openCardId, setOpenCardId] = useState<string | null>(null);
   const [overdueOnly, setOverdueOnly] = useState(false);
@@ -86,14 +92,19 @@ function BoardContent() {
   const showOverdueOnly = overdueOnly && stats.overdue > 0 && !summaryCollapsed;
   const [dueTodayOnly, setDueTodayOnly] = useState(false);
   const showDueTodayOnly = dueTodayOnly && stats.dueToday > 0 && !summaryCollapsed;
+  const [assignedToMeOnly, setAssignedToMeOnly] = useState(false);
+  const assignedToMeCount = me ? countAssignedTo(board, me) : 0;
+  // Independent of overdue/due today: it combines with them, with search and with the label filter.
+  const showAssignedToMe = me !== null && assignedToMeOnly && assignedToMeCount > 0 && !summaryCollapsed;
   const [labelFilter, setLabelFilter] = useState<string | null>(null);
   const labelsInUse = boardLabels(board);
   // Like the overdue filter, the label filter lapses once no card has the label any more.
   const activeLabel =
     labelFilter !== null && labelsInUse.some((l) => l.toLowerCase() === labelFilter.toLowerCase()) ? labelFilter : null;
   const base = showOverdueOnly ? filterOverdue(board) : showDueTodayOnly ? filterDueToday(board) : board;
-  const visible = filterByLabel(filterCards(base, query), activeLabel);
-  const filtering = isFiltering(query) || showOverdueOnly || showDueTodayOnly || activeLabel !== null;
+  const mine = showAssignedToMe && me ? filterAssignedTo(base, me) : base;
+  const visible = filterByLabel(filterCards(mine, query), activeLabel);
+  const filtering = isFiltering(query) || showOverdueOnly || showDueTodayOnly || showAssignedToMe || activeLabel !== null;
   const [dragOver, setDragOver] = useState<ColumnId | null>(null);
   const dragSource = useRef<{ id: string; column: ColumnId } | null>(null);
 
@@ -219,6 +230,7 @@ function BoardContent() {
           card={open.card}
           column={open.column}
           board={board}
+          boardId={currentId}
           onChecklist={update}
           onSave={(edits) => {
             update((b) => updateCard(b, openCardId, edits));
@@ -278,11 +290,15 @@ function BoardContent() {
           setDueTodayOnly(!showDueTodayOnly);
           setOverdueOnly(false);
         }}
+        assignedToMeCount={assignedToMeCount}
+        assignedToMeOnly={showAssignedToMe}
+        onToggleAssignedToMe={() => setAssignedToMeOnly(!showAssignedToMe)}
         collapsed={summaryCollapsed}
         onToggleCollapsed={() => {
           if (!summaryCollapsed) {
             setOverdueOnly(false);
             setDueTodayOnly(false);
+            setAssignedToMeOnly(false);
           }
           setSummaryCollapsed(!summaryCollapsed);
         }}

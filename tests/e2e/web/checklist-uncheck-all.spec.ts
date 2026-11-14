@@ -21,7 +21,7 @@ test("Uncheck all unticks every item, keeps them and persists", async ({ page })
   await expect(uncheckAll).toBeEnabled();
   await uncheckAll.click();
 
-  await expect(dialog.getByRole("checkbox")).toHaveCount(3);
+  await expect(dialog.getByRole("list", { name: "Checklist items" }).getByRole("checkbox")).toHaveCount(3);
   for (const name of ["One", "Two", "Three"]) {
     await expect(dialog.getByRole("checkbox", { name })).not.toBeChecked();
   }

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   addCard,
+  assignToCard,
   boardStats,
+  countAssignedTo,
   emptyBoard,
+  filterAssignedTo,
   filterCards,
   filterDueToday,
   filterOverdue,
@@ -167,5 +170,32 @@ describe("boardStats / filterOverdue", () => {
     expect(ids(filtered.columns.doing)).toEqual(["c"]);
     expect(filtered.columns.done).toEqual([]);
     expect(ids(board.columns.done)).toEqual(["d"]);
+  });
+});
+
+describe("filterAssignedTo / countAssignedTo", () => {
+  let board = addCard(emptyBoard(), "Mine", { id: "a" });
+  board = addCard(board, "Theirs", { id: "b" });
+  board = addCard(board, "Both", { id: "c" });
+  board = addCard(board, "Nobody", { id: "d" });
+  board = moveCard(board, "c", "doing");
+  board = assignToCard(board, "a", "Me@Example.test");
+  board = assignToCard(board, "b", "other@example.test");
+  board = assignToCard(board, "c", "other@example.test");
+  board = assignToCard(board, "c", "me@example.test");
+
+  it("keeps only the cards assigned to the email, ignoring case and keeping order", () => {
+    const filtered = filterAssignedTo(board, "ME@example.test");
+    expect(ids(filtered.columns.todo)).toEqual(["a"]);
+    expect(ids(filtered.columns.doing)).toEqual(["c"]);
+    expect(filtered.columns.done).toEqual([]);
+    expect(ids(board.columns.todo)).toEqual(["a", "b", "d"]);
+  });
+
+  it("counts the cards, treating cards without assignees as not assigned", () => {
+    expect(countAssignedTo(board, "me@example.test")).toBe(2);
+    expect(countAssignedTo(board, "other@example.test")).toBe(3 - 1);
+    expect(countAssignedTo(board, "nobody@example.test")).toBe(0);
+    expect(countAssignedTo(emptyBoard(), "me@example.test")).toBe(0);
   });
 });

@@ -1,7 +1,8 @@
 import { createEvent, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_LABEL_LENGTH, MAX_NOTES_LENGTH, type Card } from "@/lib/board";
+import { addCard, emptyBoard, MAX_LABEL_LENGTH, MAX_NOTES_LENGTH, type Board, type Card } from "@/lib/board";
+import * as apiClient from "@/lib/api-client";
 import { CardDialog } from "@/components/card/CardDialog";
 
 const card: Card = {
@@ -40,6 +41,51 @@ function renderCopy(onCopyText: () => Promise<"copied" | { text: string }>) {
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("<CardDialog /> assignees", () => {
+  function renderWithBoard(boardId: string | null) {
+    const onUpdateBoard = vi.fn();
+    render(
+      <CardDialog
+        card={card}
+        column="todo"
+        boardId={boardId}
+        onSave={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+        onUpdateBoard={onUpdateBoard}
+      />,
+    );
+    return { onUpdateBoard, user: userEvent.setup() };
+  }
+
+  it("applies an assignment immediately through onUpdateBoard", async () => {
+    vi.spyOn(apiClient, "listMembers").mockResolvedValue({
+      owner: { email: "owner@example.test" },
+      members: [],
+    });
+    const { onUpdateBoard, user } = renderWithBoard("b1");
+    await user.click(await screen.findByRole("checkbox", { name: "owner@example.test" }));
+    expect(onUpdateBoard).toHaveBeenCalledTimes(1);
+    const change = onUpdateBoard.mock.calls[0][0] as (board: Board) => Board;
+    const next = change(addCard(emptyBoard(), "Write docs", { id: "a" }));
+    expect(next.columns.todo[0].assignees).toEqual(["owner@example.test"]);
+  });
+
+  it("does not show the picker without a board id", () => {
+    const spy = vi.spyOn(apiClient, "listMembers");
+    renderWithBoard(null);
+    expect(screen.queryByRole("group", { name: "Assignees" })).not.toBeInTheDocument();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("keeps working and explains when the members cannot be loaded", async () => {
+    vi.spyOn(apiClient, "listMembers").mockRejectedValue(new Error("boom"));
+    renderWithBoard("b1");
+    expect(await screen.findByText("Could not load board members.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+});
 
 describe("<CardDialog /> size", () => {
   it("uses the wide dialog size", () => {

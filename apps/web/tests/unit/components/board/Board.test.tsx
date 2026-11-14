@@ -7,6 +7,11 @@ import { resetBoardStore } from "@/hooks/useBoard";
 import { resetSummaryCollapsedStore } from "@/hooks/useSummaryCollapsed";
 import { SUMMARY_COLLAPSED_KEY } from "@/lib/summaryCollapsed";
 import { Board } from "@/components/board/Board";
+
+// Keep the real better-auth session client (and its timers) out of these board tests.
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({ status: "anonymous", user: null, logout: vi.fn() }),
+}));
 import { UNDO_TOAST_MS } from "@/components/board/UndoToast";
 
 const column = (name: string) => screen.getByRole("region", { name: new RegExp(`^${name}`) });
