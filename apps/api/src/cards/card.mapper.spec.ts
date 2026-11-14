@@ -17,6 +17,7 @@ const base: CardWithDetails = {
   checklist: [],
   comments: [],
   labels: [],
+  assignees: [],
   activity: [],
 };
 
@@ -112,8 +113,17 @@ describe("toCard", () => {
     expect(card.activity[0]).toMatchObject({ to: "a@example.test" });
   });
 
-  it("returns no assignees for now", () => {
+  it("returns no assignees by default and maps the stored emails in order", () => {
     expect(toCard(base).assignees).toEqual([]);
+    const at = new Date();
+    const card = toCard({
+      ...base,
+      assignees: [
+        { id: "x", cardId: "c1", email: "b@example.test", createdAt: at },
+        { id: "y", cardId: "c1", email: "a@example.test", createdAt: at },
+      ],
+    });
+    expect(card.assignees).toEqual(["b@example.test", "a@example.test"]);
   });
 });
 
@@ -138,6 +148,7 @@ describe("cardDetails", () => {
     expect(cardDetails.checklist.orderBy).toEqual({ position: "asc" });
     expect(cardDetails.comments.orderBy).toEqual([{ createdAt: "asc" }, { id: "asc" }]);
     expect(cardDetails.labels.orderBy).toEqual({ position: "asc" });
+    expect(cardDetails.assignees.orderBy).toEqual([{ createdAt: "asc" }, { id: "asc" }]);
     expect(cardDetails.activity.orderBy).toEqual([{ at: "desc" }, { id: "desc" }]);
     expect(cardDetails.activity.take).toBe(MAX_ACTIVITY_ENTRIES);
   });
