@@ -191,6 +191,11 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ steps.app.outputs.token }}
           allowed_bots: ${{ steps.app.outputs.app-slug }}[bot]
+          # The action denies npm/npx/node and similar on PR runs whose author it can't confirm has write
+          # access, which includes the agents' own bot, and that overrides AGENT_BUILD_TOOLS: the
+          # Implementor couldn't run any check while fixing a PR. This job only runs for branches in this
+          # repository (see `if:` above), which already takes write access to push, so the guard adds nothing.
+          restrict_untrusted_prs: "false"
           prompt: |
             You are the IMPLEMENTOR agent. Read ${{ env.TRUSTED }}/implementor.md and follow it exactly.
 
