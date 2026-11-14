@@ -11,6 +11,7 @@ import {
   type DueStatus,
   type Priority,
 } from "@/lib/board";
+import { AssigneeAvatars } from "./AssigneeAvatars";
 import { coverStyles } from "./coverColors";
 import { DueChip } from "./DueChip";
 import { LabelChip } from "./LabelChip";
@@ -100,6 +101,11 @@ export function CardItem({
             </li>
           ))}
         </ul>
+      )}
+      {card.assignees && card.assignees.length > 0 && (
+        <div className="mt-2">
+          <AssigneeAvatars assignees={card.assignees} />
+        </div>
       )}
       {progress && (
         <p className="mt-2">

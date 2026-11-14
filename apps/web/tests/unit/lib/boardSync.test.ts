@@ -7,6 +7,8 @@ import {
   archiveCard,
   archiveDone,
   archiveList,
+  assignToCard,
+  unassignFromCard,
   collapseAllLists,
   deleteArchived,
   deleteCard,
@@ -89,6 +91,8 @@ const ACTIONS: Record<string, (b: Board) => Board> = {
   clearDueDate: (b) => setDueDate(setDueDate(b, "c1", "2026-05-06"), "c1", undefined),
   setLabels: (b) => setLabels(b, "c1", ["ui", "bug", "new"]),
   clearLabels: (b) => setLabels(b, "c1", []),
+  assignToCard: (b) => assignToCard(b, "c1", "a@example.test"),
+  unassignFromCard: (b) => unassignFromCard(assignToCard(b, "c1", "a@example.test"), "c1", "a@example.test"),
   addChecklistItem: (b) => addChecklistItem(b, "c2", "step", { id: "i9" }),
   toggleChecklistItem: (b) => toggleChecklistItem(b, "c1", "i1"),
   editChecklistItem: (b) => editChecklistItem(b, "c1", "i1", "edited"),
@@ -165,6 +169,30 @@ describe("diffBoard", () => {
       { kind: "duplicateCard", id: "d1", sourceId: "c1" },
       { kind: "reorderCards", listId: "todo", cardIds: ["c1", "d1", "c2"] },
     ]);
+  });
+
+  it("unassigns removed assignees, then assigns added ones", () => {
+    const before = assignToCard(assignToCard(start(), "c1", "a@example.test"), "c1", "b@example.test");
+    const after = assignToCard(unassignFromCard(before, "c1", "a@example.test"), "c1", "c@example.test");
+    expect(diffBoard(before, after)).toEqual([
+      { kind: "unassignCard", cardId: "c1", email: "a@example.test" },
+      { kind: "assignCard", cardId: "c1", email: "c@example.test" },
+    ]);
+  });
+
+  it("sends a new card's assignees after creating it", () => {
+    const before = start();
+    const after = assignToCard(addCard(before, "New", { id: "n1", now: NOW, listId: "doing" }), "n1", "a@example.test");
+    expect(diffBoard(before, after)).toEqual([
+      expect.objectContaining({ kind: "createCard", id: "n1" }),
+      { kind: "assignCard", cardId: "n1", email: "a@example.test" },
+    ]);
+  });
+
+  it("never sends assign operations for a duplicate", () => {
+    const before = assignToCard(start(), "c1", "a@example.test");
+    const after = duplicateCard(before, "c1", { id: "d1", now: NOW });
+    expect(kinds(diffBoard(before, after))).not.toContain("assignCard");
   });
 
   it("moves a card to the end of the target list", () => {
@@ -249,6 +277,8 @@ describe("runOperations", () => {
     "DELETE /cards/:x",
     "POST /cards/:x/labels",
     "DELETE /cards/:x/labels/:x",
+    "POST /cards/:x/assignees",
+    "DELETE /cards/:x/assignees/:x",
     "POST /cards/:x/checklist",
     "PUT /cards/:x/checklist/order",
     "PATCH /cards/:x/checklist/:x",
@@ -295,6 +325,25 @@ describe("runOperations", () => {
       });
       expect(known, call).toBe(true);
     }
+  });
+
+  it("sends assign and unassign to the assignee endpoints, URL-encoding the email", async () => {
+    const calls: { path: string; method?: string; body?: unknown }[] = [];
+    const request = vi.fn(async (path: string, options?: { method?: string; body?: unknown }) => {
+      calls.push({ path, method: options?.method, body: options?.body });
+      return undefined;
+    });
+    await runOperations(
+      [
+        { kind: "assignCard", cardId: "n1", email: "a+b@example.test" },
+        { kind: "unassignCard", cardId: "n1", email: "a+b@example.test" },
+      ],
+      { boardId: "b1", ids: new Map([["n1", "srv"]]), request: request as never },
+    );
+    expect(calls).toEqual([
+      { path: "/cards/srv/assignees", method: "POST", body: { email: "a+b@example.test" } },
+      { path: "/cards/srv/assignees/a%2Bb%40example.test", method: "DELETE", body: undefined },
+    ]);
   });
 
   it("stops at the first failure", async () => {

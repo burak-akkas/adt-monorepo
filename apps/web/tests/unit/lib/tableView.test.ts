@@ -3,6 +3,7 @@ import {
   addCard,
   addChecklistItem,
   archiveList,
+  assignToCard,
   emptyBoard,
   moveCard,
   setDueDate,
@@ -80,6 +81,14 @@ describe("sortRows", () => {
   it("sorts by first label with unlabelled cards last", () => {
     expect(sorted("labels", "asc")).toEqual(["b", "a", "d", "c"]);
     expect(sorted("labels", "desc")).toEqual(["a", "b", "d", "c"]);
+  });
+
+  it("sorts by first assignee with unassigned cards last", () => {
+    let b = assignToCard(seed(), "a", "zed@example.test");
+    b = assignToCard(b, "b", "amy@example.test");
+    const by = (dir: "asc" | "desc") => ids(sortRows(tableRows(b), "assignees", dir));
+    expect(by("asc")).toEqual(["b", "a", "d", "c"]);
+    expect(by("desc")).toEqual(["a", "b", "d", "c"]);
   });
 
   it("sorts by checklist ratio with no checklist last", () => {

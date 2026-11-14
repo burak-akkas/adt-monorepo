@@ -30,6 +30,7 @@ export * from "./sortListByTitle";
 export * from "./notes";
 export * from "./comments";
 export * from "./labels";
+export * from "./assignees";
 export * from "./checklist";
 export * from "./filters";
 export * from "./title";
