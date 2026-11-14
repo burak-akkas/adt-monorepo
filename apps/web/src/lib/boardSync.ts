@@ -21,6 +21,8 @@ export type Operation =
   | { kind: "updateCard"; id: string; patch: UpdateCardRequest }
   | { kind: "addLabel"; cardId: string; name: string }
   | { kind: "removeLabel"; cardId: string; name: string }
+  | { kind: "assignCard"; cardId: string; email: string }
+  | { kind: "unassignCard"; cardId: string; email: string }
   | { kind: "addChecklistItem"; cardId: string; id: string; text: string }
   | { kind: "updateChecklistItem"; cardId: string; id: string; text?: string; done?: boolean }
   | { kind: "deleteChecklistItem"; cardId: string; id: string }
@@ -89,7 +91,7 @@ function cardPatch(prev: Card, next: Card): UpdateCardRequest {
 // A card the server just made from `card`'s title, priority, cover, due date and notes: only labels, checklist
 // and comments are left to send.
 function newCardOps(card: Card): Operation[] {
-  const blank: Card = { ...card, labels: [], checklist: [], comments: [] };
+  const blank: Card = { ...card, labels: [], assignees: [], checklist: [], comments: [] };
   return cardContentOps(blank, card);
 }
 
@@ -112,6 +114,19 @@ function cardContentOps(prev: Card, next: Card): Operation[] {
   }
   for (const name of after.slice(common)) {
     ops.push({ kind: "addLabel", cardId: next.id, name });
+  }
+
+  const assigneesBefore = prev.assignees ?? [];
+  const assigneesAfter = next.assignees ?? [];
+  for (const email of assigneesBefore) {
+    if (!assigneesAfter.includes(email)) {
+      ops.push({ kind: "unassignCard", cardId: next.id, email });
+    }
+  }
+  for (const email of assigneesAfter) {
+    if (!assigneesBefore.includes(email)) {
+      ops.push({ kind: "assignCard", cardId: next.id, email });
+    }
   }
 
   const oldItems = new Map((prev.checklist ?? []).map((i) => [i.id, i]));
@@ -434,6 +449,12 @@ export async function runOperations(operations: readonly Operation[], context: R
         break;
       case "removeLabel":
         await send(`/cards/${real(op.cardId)}/labels/${encodeURIComponent(op.name)}`, "DELETE");
+        break;
+      case "assignCard":
+        await send(`/cards/${real(op.cardId)}/assignees`, "POST", { email: op.email });
+        break;
+      case "unassignCard":
+        await send(`/cards/${real(op.cardId)}/assignees/${encodeURIComponent(op.email)}`, "DELETE");
         break;
       case "addChecklistItem": {
         const cardId = real(op.cardId);

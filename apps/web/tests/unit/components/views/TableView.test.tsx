@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { addCard, emptyBoard, moveCard, setLabels, setPriority } from "@/lib/board";
+import { addCard, assignToCard, emptyBoard, moveCard, setLabels, setPriority } from "@/lib/board";
 import { TableView } from "@/components/views/TableView";
 
 function seed() {
@@ -24,7 +24,7 @@ const bodyTitles = () =>
 describe("<TableView />", () => {
   it("shows all columns and every open card", () => {
     render(<TableView board={seed()} onOpen={() => {}} />);
-    for (const name of ["Title", "List", "Priority", "Due date", "Labels", "Checklist", "Last activity"]) {
+    for (const name of ["Title", "List", "Priority", "Due date", "Labels", "Assignees", "Checklist", "Last activity"]) {
       expect(screen.getByRole("columnheader", { name })).toBeInTheDocument();
     }
     expect(bodyTitles()).toHaveLength(3);
@@ -45,6 +45,20 @@ describe("<TableView />", () => {
     await user.click(within(header).getByRole("button"));
     expect(header).toHaveAttribute("aria-sort", "descending");
     expect(bodyTitles()).toEqual(["Cherry", "Banana", "Apple"]);
+  });
+
+  it("shows assignee avatars and sorts by them, cards without last", async () => {
+    const user = userEvent.setup();
+    let board = assignToCard(seed(), "a", "zed@example.test");
+    board = assignToCard(board, "b", "amy@example.test");
+    render(<TableView board={board} onOpen={() => {}} />);
+    expect(screen.getByRole("listitem", { name: "Assigned to zed@example.test" })).toBeInTheDocument();
+    const header = screen.getByRole("columnheader", { name: "Assignees" });
+    await user.click(within(header).getByRole("button"));
+    expect(header).toHaveAttribute("aria-sort", "ascending");
+    expect(bodyTitles()).toEqual(["Apple", "Banana", "Cherry"]);
+    await user.click(within(header).getByRole("button"));
+    expect(bodyTitles()).toEqual(["Banana", "Apple", "Cherry"]);
   });
 
   it("sorts from the keyboard", async () => {

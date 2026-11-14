@@ -11,6 +11,7 @@ import {
   type SortDir,
   type SortKey,
 } from "@/lib/tableView";
+import { AssigneeAvatars } from "@/components/card/AssigneeAvatars";
 import { DueChip } from "@/components/card/DueChip";
 import { LabelChip } from "@/components/card/LabelChip";
 import { Select } from "@/components/ui";
@@ -133,6 +134,9 @@ export function TableView({ board, onOpen }: { board: Board; onOpen: (cardId: st
                           <LabelChip key={l} label={l} />
                         ))}
                       </div>
+                    </td>
+                    <td className="px-3 py-2">
+                      <AssigneeAvatars assignees={card.assignees} />
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">{progress ? `${progress.done}/${progress.total}` : ""}</td>
                     <td className="px-3 py-2 whitespace-nowrap">{formatActivity(lastActivityAt(card))}</td>

@@ -18,6 +18,11 @@ function toCard(card: ServerCard): Card {
   if (card.labels.length > 0) {
     result.labels = [...card.labels];
   }
+  // An API that has not deployed the field yet sends none.
+  const assignees: readonly string[] = card.assignees ?? [];
+  if (assignees.length > 0) {
+    result.assignees = [...assignees];
+  }
   if (card.checklist.length > 0) {
     result.checklist = [...card.checklist]
       .sort((a, b) => a.position - b.position)

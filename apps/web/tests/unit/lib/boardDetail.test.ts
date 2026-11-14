@@ -77,7 +77,7 @@ function boardToDetail(board: Board): BoardDetail {
     position,
     createdAt: c.createdAt,
     labels: c.labels ?? [],
-    assignees: [],
+    assignees: c.assignees ?? [],
     checklist: (c.checklist ?? []).map((item, index) => ({ ...item, position: index })),
     comments: (c.comments ?? []).map((m) => ({ id: m.id, text: m.text, createdAt: m.createdAt, editedAt: m.editedAt ?? null })),
     activity: c.activity ?? [],
@@ -144,6 +144,15 @@ describe("detailToBoard", () => {
     expect(board.columns.l1[0]).toMatchObject({ cover: "red", dueDate: "2026-05-06", notes: "n", labels: ["x"] });
     expect(board.columns.l1[0].comments).toEqual([{ id: "m1", text: "hi", createdAt: AT }]);
     expect(board.columns.l1[1]).toEqual({ id: "b", title: "Card b", createdAt: AT, priority: "medium" });
+  });
+
+  it("maps assignees and leaves them out when empty", () => {
+    const d = detail();
+    d.lists[1].cards[1].assignees = ["a@example.test", "b@example.test"];
+    const board = detailToBoard(d);
+    expect(board.columns.l1[0].assignees).toEqual(["a@example.test", "b@example.test"]);
+    expect(board.columns.l1[1]).not.toHaveProperty("assignees");
+    expect(detailToBoard(boardToDetail(board))).toEqual(board);
   });
 
   it("maps list and board settings", () => {

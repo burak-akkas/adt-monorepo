@@ -9,7 +9,7 @@ export interface TableRow {
   listIndex: number;
 }
 
-export type SortKey = "title" | "list" | "priority" | "dueDate" | "labels" | "checklist" | "activity";
+export type SortKey = "title" | "list" | "priority" | "dueDate" | "labels" | "assignees" | "checklist" | "activity";
 
 export type SortDir = "asc" | "desc";
 
@@ -19,6 +19,7 @@ export const SORT_COLUMNS: readonly { key: SortKey; label: string }[] = [
   { key: "priority", label: "Priority" },
   { key: "dueDate", label: "Due date" },
   { key: "labels", label: "Labels" },
+  { key: "assignees", label: "Assignees" },
   { key: "checklist", label: "Checklist" },
   { key: "activity", label: "Last activity" },
 ];
@@ -73,6 +74,8 @@ export function sortRows(rows: readonly TableRow[], key: SortKey, dir: SortDir):
         return compareOptional(a.card.dueDate, b.card.dueDate, dir, (x, y) => (x < y ? -1 : x > y ? 1 : 0));
       case "labels":
         return compareOptional(a.card.labels?.[0], b.card.labels?.[0], dir, text);
+      case "assignees":
+        return compareOptional(a.card.assignees?.[0], b.card.assignees?.[0], dir, text);
       case "checklist":
         return compareOptional(ratio(a.card), ratio(b.card), dir, (x, y) => x - y);
       case "activity": {
