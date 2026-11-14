@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import urllib.parse
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from agentflow.model import Check, Comment, Commit, FileChange, Issue, LabelEvent, PullRequest, Run
@@ -151,9 +151,24 @@ class GitHub(ABC):
         Never raises: gh can report an error after the merge itself succeeded, so callers check the state."""
 
 
-def run_gh(args: list[str], stdin: str | None = None) -> str:
+def rerunner(repo: str, token: str, runner: Runner | None = None) -> Callable[[int], None]:
+    """Re-runs a workflow run's failed jobs with `token`, which must allow `actions: write` (the
+    Integrator's own GITHUB_TOKEN: the agents' App only reads Actions)."""
+
+    def rerun(run_id: int) -> None:
+        args = ["run", "rerun", str(run_id), "--failed", "-R", repo]
+        if runner:  # the tests' fake gh
+            runner(args, None)
+        else:
+            run_gh(args, None, {"GH_TOKEN": token})
+
+    return rerun
+
+
+def run_gh(args: list[str], stdin: str | None = None, env: Mapping[str, str] | None = None) -> str:
     try:
-        p = subprocess.run(["gh", *args], input=stdin, capture_output=True, text=True, check=False)
+        full_env = {**os.environ, **env} if env else None
+        p = subprocess.run(["gh", *args], input=stdin, capture_output=True, text=True, check=False, env=full_env)
     except OSError as e:
         raise GhError(f"cannot run gh: {e}") from e
     if p.returncode != 0:
