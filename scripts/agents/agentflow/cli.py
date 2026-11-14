@@ -472,7 +472,7 @@ def _qa_rules(ctx: Context) -> review.QaRules:
 def _reviewer_guard(ctx: Context, a: argparse.Namespace) -> None:
     review.reviewer_guard(
         ctx.gh, ctx.settings, _io(ctx), _n(ctx, "PR"), head=a.sha, action=a.action, qa=_qa_rules(ctx), skip_same=_is(ctx, "SKIP_SAME"),
-        max_rounds=_n(ctx, "MAX_ROUNDS", 3),
+        max_rounds=_n(ctx, "MAX_ROUNDS", 3), ignore=_s(ctx, "AGENT_CONFLICT_IGNORE"),
     )  # fmt: skip
 
 

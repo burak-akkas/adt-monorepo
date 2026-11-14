@@ -11,7 +11,7 @@ Run: python3 scripts/sim/test_step_parity.py [name-filter]
 import sys
 sys.dont_write_bytecode = True
 
-import copy, json, os, subprocess, traceback
+import copy, json, os, re, subprocess, traceback
 
 import yaml
 
@@ -50,13 +50,28 @@ def step_outcome(st):
     return o
 
 
+# Added on purpose after the move from bash (stable blocking IDs, see agent-reviewer.yml): the Reviewer's
+# guard gives more prompt lines, and reviewer-apply records each round on the Reviewer's comment. The
+# parity cases compare everything else; tests/test_steps.py ReviewLoopTest checks these additions.
+NEW_OUTPUTS = ("ids", "previous", "since", "unplanned")
+REVIEWED = re.compile(r"\n\n<!-- agent:reviewed [0-9a-f]{40} blocking=[B0-9,]*(none)? -->")
+
+
+def without_additions(o):
+    o["outputs"] = {k: v for k, v in o["outputs"].items() if k not in NEW_OUTPUTS}
+    o["stdout"] = "\n".join(line for line in o["stdout"].split("\n") if "without blocking IDs" not in line)
+    for it in o["items"].values():
+        it["comments"] = [REVIEWED.sub("", c) for c in it["comments"]]
+    return o
+
+
 def compare(st, wf, job, name, ctx=None, differs=(), **env):
     """ctx: values for the step's ${{ }} expressions (as the sim gives them); env: the step's environment."""
     old = old_steps(wf, job)[name]["run"]
     new = simlib.steps(wf, job)[name]["run"]
     a = step_outcome(run(copy.deepcopy(st), shell=PRE + subst(old, ctx or {}), **env))
     r = run(copy.deepcopy(st), shell=PRE + subst(new, ctx or {}), **env)
-    b = step_outcome(r)
+    b = without_additions(step_outcome(r))
     for k in differs:
         a.pop(k), b.pop(k)
     if a != b:

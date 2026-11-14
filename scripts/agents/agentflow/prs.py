@@ -78,6 +78,14 @@ def _same_edits(gh: GitHub, pr: int, approved: str, head: str, interdiff: str | 
     return False
 
 
+def edits_since(gh: GitHub, pr: int, before: str, after: str, interdiff: str) -> bool:
+    """Did the PR's own edits change between two of its commits? If so, writes how (a unified diff of
+    its own added and removed lines, as at `before` versus `after`) to `interdiff`. Changes that only
+    came from merging the base branch don't show. An incomplete diff (too many or binary files) counts
+    as changed, with no file written."""
+    return before != after and not _same_edits(gh, pr, before, after, interdiff)
+
+
 def same_own_changes(gh: GitHub, s: Settings, pr: int, head: str, interdiff: str | None = None) -> str | None:
     """The approved commit if the PR still makes exactly the edits approved there (e.g. after merging
     the base and resolving conflicts by keeping both sides), else None. With `interdiff`, writes how
