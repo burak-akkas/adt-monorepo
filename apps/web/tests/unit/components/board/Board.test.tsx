@@ -684,6 +684,108 @@ describe("<Board />", () => {
       expect(within(column("To do")).getByText("Fine")).toBeInTheDocument();
     });
 
+    describe("due today filter", () => {
+      const seedToday = () => {
+        let board = emptyBoard();
+        for (const [id, title] of [
+          ["a", "Today one"],
+          ["b", "Today two"],
+          ["c", "Late"],
+          ["d", "Fine"],
+        ]) {
+          board = addCard(board, title, { id });
+        }
+        board = setDueDate(board, "a", todayString());
+        board = setDueDate(board, "b", todayString());
+        board = setDueDate(board, "c", "2000-01-01");
+        saveBoard(board);
+      };
+      const todayButton = () => within(summary()).getByRole("button", { name: /Due today: 2/ });
+
+      it("filters to cards due today and toggles back", async () => {
+        const user = userEvent.setup();
+        seedToday();
+        render(<Board />);
+
+        expect(todayButton()).toHaveAccessibleName("Due today: 2. Show only cards due today");
+        expect(todayButton()).toHaveAttribute("aria-pressed", "false");
+        await user.click(todayButton());
+        expect(todayButton()).toHaveAccessibleName("Due today: 2. Show all cards");
+        expect(todayButton()).toHaveAttribute("aria-pressed", "true");
+        expect(within(column("To do")).getByText("Today one")).toBeInTheDocument();
+        expect(within(column("To do")).getByText("Today two")).toBeInTheDocument();
+        expect(within(column("To do")).queryByText("Late")).not.toBeInTheDocument();
+        expect(within(column("To do")).queryByText("Fine")).not.toBeInTheDocument();
+
+        await user.click(todayButton());
+        expect(within(column("To do")).getByText("Fine")).toBeInTheDocument();
+        expect(within(column("To do")).getByText("Late")).toBeInTheDocument();
+      });
+
+      it("is plain text when no card is due today", () => {
+        saveBoard(addCard(emptyBoard(), "One", { id: "a" }));
+        render(<Board />);
+
+        expect(within(summary()).getByText("Due today: 0")).toBeInTheDocument();
+        expect(within(summary()).queryByRole("button", { name: /Due today/ })).not.toBeInTheDocument();
+      });
+
+      it("is mutually exclusive with the overdue filter", async () => {
+        const user = userEvent.setup();
+        seedToday();
+        render(<Board />);
+
+        await user.click(todayButton());
+        await user.click(within(summary()).getByRole("button", { name: /Overdue: 1/ }));
+        expect(todayButton()).toHaveAttribute("aria-pressed", "false");
+        expect(within(summary()).getByRole("button", { name: /Overdue: 1/ })).toHaveAttribute("aria-pressed", "true");
+        expect(within(column("To do")).getByText("Late")).toBeInTheDocument();
+        expect(within(column("To do")).queryByText("Today one")).not.toBeInTheDocument();
+
+        await user.click(todayButton());
+        expect(within(summary()).getByRole("button", { name: /Overdue: 1/ })).toHaveAttribute("aria-pressed", "false");
+        expect(todayButton()).toHaveAttribute("aria-pressed", "true");
+        expect(within(column("To do")).queryByText("Late")).not.toBeInTheDocument();
+      });
+
+      it("combines with the search box", async () => {
+        const user = userEvent.setup();
+        seedToday();
+        render(<Board />);
+
+        await user.click(todayButton());
+        await user.type(screen.getByLabelText("Search cards"), "two");
+        expect(within(column("To do")).getByText("Today two")).toBeInTheDocument();
+        expect(within(column("To do")).queryByText("Today one")).not.toBeInTheDocument();
+        expect(within(column("Doing")).getByText("No matching cards")).toBeInTheDocument();
+      });
+
+      it("drops the filter once nothing is due today", async () => {
+        const user = userEvent.setup();
+        saveBoard(setDueDate(addCard(emptyBoard(), "Now", { id: "a" }), "a", todayString()));
+        render(<Board />);
+
+        await user.click(within(summary()).getByRole("button", { name: /Due today: 1/ }));
+        await moveVia(user, "Now", "Done");
+        expect(within(summary()).getByText("Due today: 0")).toBeInTheDocument();
+        expect(within(column("Done")).getByText("Now")).toBeInTheDocument();
+      });
+
+      it("clears the filter when the summary is collapsed and keeps it off after expanding", async () => {
+        const user = userEvent.setup();
+        seedToday();
+        render(<Board />);
+
+        await user.click(todayButton());
+        await user.click(within(summary()).getByRole("button", { name: "Collapse board summary" }));
+        expect(within(column("To do")).getByText("Fine")).toBeInTheDocument();
+
+        await user.click(within(summary()).getByRole("button", { name: "Expand board summary" }));
+        expect(todayButton()).toHaveAttribute("aria-pressed", "false");
+        expect(within(column("To do")).getByText("Fine")).toBeInTheDocument();
+      });
+    });
+
     it("renders collapsed when a collapsed value is persisted", () => {
       localStorage.setItem(SUMMARY_COLLAPSED_KEY, "1");
       saveBoard(addCard(emptyBoard(), "One", { id: "a" }));

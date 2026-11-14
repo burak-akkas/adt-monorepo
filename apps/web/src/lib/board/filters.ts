@@ -18,6 +18,7 @@ export function filterCards(board: Board, query: string): Board {
 export function boardStats(board: Board, today: string = todayString()): BoardStats {
   let total = 0;
   let overdue = 0;
+  let dueToday = 0;
   let highOpen = 0;
   const doneId = insightsListIds(board).done;
   for (const { id: column } of boardLists(board)) {
@@ -26,13 +27,16 @@ export function boardStats(board: Board, today: string = todayString()): BoardSt
       if (isOverdue(card, column, today, doneId ?? null)) {
         overdue += 1;
       }
+      if (dueStatus(card, column, today, doneId ?? null) === "today") {
+        dueToday += 1;
+      }
       if (column !== doneId && card.priority === "high") {
         highOpen += 1;
       }
     }
   }
   const done = doneId === undefined ? 0 : listCards(board, doneId).length;
-  return { total, done, percentDone: total === 0 ? 0 : Math.round((done / total) * 100), overdue, highOpen };
+  return { total, done, percentDone: total === 0 ? 0 : Math.round((done / total) * 100), overdue, dueToday, highOpen };
 }
 
 // How many cards in one list are overdue (always 0 for the done list).
@@ -51,4 +55,10 @@ export function listDueTodayCount(board: Board, listId: string, today: string = 
 export function filterOverdue(board: Board, today: string = todayString()): Board {
   const doneId = insightsListIds(board).done ?? null;
   return mapLists(board, (cards, id) => cards.filter((c) => isOverdue(c, id, today, doneId)));
+}
+
+// Only the cards due today (not overdue, not in the done list).
+export function filterDueToday(board: Board, today: string = todayString()): Board {
+  const doneId = insightsListIds(board).done ?? null;
+  return mapLists(board, (cards, id) => cards.filter((c) => dueStatus(c, id, today, doneId) === "today"));
 }

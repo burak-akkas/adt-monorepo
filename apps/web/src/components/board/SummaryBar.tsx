@@ -7,12 +7,16 @@ export function SummaryBar({
   stats,
   overdueOnly,
   onToggleOverdue,
+  dueTodayOnly,
+  onToggleDueToday,
   collapsed,
   onToggleCollapsed,
 }: {
   stats: BoardStats;
   overdueOnly: boolean;
   onToggleOverdue: () => void;
+  dueTodayOnly: boolean;
+  onToggleDueToday: () => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }) {
@@ -69,6 +73,23 @@ export function SummaryBar({
           </button>
         ) : (
           <p>Overdue: 0</p>
+        )}
+        {stats.dueToday > 0 ? (
+          <button
+            type="button"
+            aria-pressed={dueTodayOnly}
+            aria-label={`Due today: ${stats.dueToday}. ${dueTodayOnly ? "Show all cards" : "Show only cards due today"}`}
+            onClick={onToggleDueToday}
+            className={`rounded-md border px-2 py-0.5 font-medium ${
+              dueTodayOnly
+                ? "border-amber-600 bg-amber-600 text-white dark:border-amber-500 dark:bg-amber-500 dark:text-zinc-950"
+                : "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300 dark:hover:bg-amber-950"
+            }`}
+          >
+            Due today: {stats.dueToday}
+          </button>
+        ) : (
+          <p>Due today: 0</p>
         )}
         <p>High priority open: {stats.highOpen}</p>
       </div>

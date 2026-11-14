@@ -4,6 +4,7 @@ import {
   boardStats,
   emptyBoard,
   filterCards,
+  filterDueToday,
   filterOverdue,
   isFiltering,
   listDueTodayCount,
@@ -69,11 +70,55 @@ describe("boardStats / filterOverdue", () => {
   board = setPriority(board, "d", "high"); // high but done
 
   it("counts totals, progress, overdue and open high priority cards", () => {
-    expect(boardStats(board, TODAY)).toEqual({ total: 4, done: 1, percentDone: 25, overdue: 2, highOpen: 2 });
+    expect(boardStats(board, TODAY)).toEqual({
+      total: 4,
+      done: 1,
+      percentDone: 25,
+      overdue: 2,
+      dueToday: 1,
+      highOpen: 2,
+    });
   });
 
   it("handles an empty board", () => {
-    expect(boardStats(emptyBoard(), TODAY)).toEqual({ total: 0, done: 0, percentDone: 0, overdue: 0, highOpen: 0 });
+    expect(boardStats(emptyBoard(), TODAY)).toEqual({
+      total: 0,
+      done: 0,
+      percentDone: 0,
+      overdue: 0,
+      dueToday: 0,
+      highOpen: 0,
+    });
+  });
+
+  it("counts cards due today across lists, excluding overdue, undated and done cards", () => {
+    let b = emptyBoard();
+    for (const id of ["a", "b", "c", "d", "e"]) {
+      b = addCard(b, `Card ${id}`, { id });
+    }
+    b = setDueDate(b, "a", "2026-10-28");
+    b = setDueDate(b, "b", "2026-10-28");
+    b = moveCard(b, "b", "doing");
+    b = setDueDate(b, "c", "2026-10-27"); // overdue
+    b = moveCard(b, "e", "done");
+    b = setDueDate(b, "e", "2026-10-28"); // done
+    expect(boardStats(b, TODAY).dueToday).toBe(2);
+  });
+
+  it("keeps only cards due today, not overdue or done, and does not mutate", () => {
+    let b = emptyBoard();
+    for (const id of ["a", "b", "c", "d"]) {
+      b = addCard(b, `Card ${id}`, { id });
+    }
+    b = setDueDate(b, "a", "2026-10-28");
+    b = setDueDate(b, "b", "2026-10-27");
+    b = moveCard(b, "c", "done");
+    b = setDueDate(b, "c", "2026-10-28");
+    const snapshot = structuredClone(b);
+    const filtered = filterDueToday(b, TODAY);
+    expect(ids(filtered.columns.todo)).toEqual(["a"]);
+    expect(filtered.columns.done).toEqual([]);
+    expect(b).toEqual(snapshot);
   });
 
   it("rounds the percentage", () => {

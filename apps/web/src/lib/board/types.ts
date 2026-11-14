@@ -206,6 +206,8 @@ export interface BoardStats {
   // Share of cards in Done, rounded to a whole percent (0 for an empty board).
   percentDone: number;
   overdue: number;
+  // Cards due today (not overdue, not in Done).
+  dueToday: number;
   // High priority cards that are not in Done.
   highOpen: number;
 }
