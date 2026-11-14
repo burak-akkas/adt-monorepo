@@ -8,8 +8,9 @@ import contextlib
 import os
 import re
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 
-from agentflow import issues, markers, prs, queue
+from agentflow import issues, markers, overlap, prs, queue
 from agentflow.clock import Clock, SystemClock
 from agentflow.config import Settings
 from agentflow.github import GhError, GitHub
@@ -20,6 +21,11 @@ from agentflow.step import StepIO, field_of, posted, result, run_log
 
 APPROVE = re.compile(r"\*\*Verdict:\*\*\s*approve")
 PASS = re.compile(r"\*\*Verdict:\*\*\s*pass")
+BLOCKING_ID = re.compile(r"B[1-9][0-9]*")
+# What a review round looked at, recorded by reviewer-apply on the Reviewer's own comment.
+REVIEWED = re.compile(r"<!-- agent:reviewed ([0-9a-f]{40}) blocking=([B0-9,]*|none) -->")
+# Files that don't need a place in the design: tests and lockfiles/changelogs (overlap's defaults).
+TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|e2e)/|\.(spec|test)\.[a-z]+$")
 
 
 def rounds(gh: GitHub, s: Settings, pr: int, role: str, success: re.Pattern[str]) -> tuple[int, int, int]:
@@ -30,6 +36,59 @@ def rounds(gh: GitHub, s: Settings, pr: int, role: str, success: re.Pattern[str]
     tag = markers.tag(role)
     since = [c for c in mine[markers.last_index(mine, markers.tag("lead")) + 1 :] if tag in c.body]
     return sum(1 for c in mine if tag in c.body), len(since), sum(1 for c in since if not success.search(c.body))
+
+
+def blocking_ids(res: dict[str, object]) -> list[str]:
+    """The blocking item IDs (B1, B2, …) in the Reviewer's result, unique, in its order."""
+    raw = res.get("blocking")
+    found = [x.strip() for x in raw if isinstance(x, str)] if isinstance(raw, list) else []
+    return list(dict.fromkeys(x for x in found if BLOCKING_ID.fullmatch(x)))
+
+
+@dataclass(frozen=True)
+class Reviewed:
+    """One recorded review round: the commit it reviewed, its blocking IDs, and whether it came after the
+    latest Lead decision."""
+
+    number: int  # 1-based, over the whole PR
+    sha: str
+    blocking: tuple[str, ...]
+    since_lead: bool
+
+
+def reviewed_rounds(gh: GitHub, s: Settings, pr: int) -> list[Reviewed]:
+    """Every review round the bot recorded on this PR, oldest first."""
+    mine = markers.from_bot(gh.comments(pr), s.bot)
+    lead = markers.last_index(mine, markers.tag("lead"))
+    found: list[Reviewed] = []
+    for i, c in enumerate(mine):
+        m = REVIEWED.search(c.body) if markers.tag("reviewer") in c.body else None
+        if m:
+            ids = tuple(x for x in m.group(2).split(",") if BLOCKING_ID.fullmatch(x))
+            found.append(Reviewed(len(found) + 1, m.group(1), ids, i > lead))
+    return found
+
+
+def ids_so_far(done: list[Reviewed]) -> str:
+    """The prompt line that keeps blocking IDs stable across rounds."""
+    first: dict[str, int] = {}
+    for r in done:
+        for b in r.blocking:
+            first.setdefault(b, r.number)
+    top = max((int(b[1:]) for b in first), default=0)
+    listed = ", ".join(f"{b} (round {n})" for b, n in sorted(first.items(), key=lambda kv: int(kv[0][1:])))
+    return f"{listed or 'none yet'}; next free: B{top + 1}"
+
+
+def unplanned_files(gh: GitHub, s: Settings, pr: int, ignore: str) -> list[str]:
+    """Files the PR changes that the linked issue's design doesn't list (tests and ignored files aside).
+    Empty when there's no design with planned files (a human's PR, an old issue)."""
+    issue = gh.pr_closing_issue(pr)
+    planned = set(overlap.planned_files(gh, s, issue)) if issue else set()
+    if not planned:
+        return []
+    patterns = [p for p in (ignore or overlap.DEFAULT_IGNORE).split("|") if p]
+    return [f for f in gh.pr_files(pr) if f not in planned and not TEST_FILE.search(f) and not any(fnmatchcase(f, p) for p in patterns)]
 
 
 def _quiet(fn: object, *args: object) -> str | None:
@@ -60,7 +119,9 @@ def _skip_after_base_merge(gh: GitHub, s: Settings, io: StepIO, pr: int, *, head
     io.output(stop="true")
 
 
-def reviewer_guard(gh: GitHub, s: Settings, io: StepIO, pr: int, *, head: str, action: str, qa: QaRules, skip_same: bool, max_rounds: int) -> None:
+def reviewer_guard(
+    gh: GitHub, s: Settings, io: StepIO, pr: int, *, head: str, action: str, qa: QaRules, skip_same: bool, max_rounds: int, ignore: str = ""
+) -> None:
     os.makedirs(".agent-out", exist_ok=True)
     # A queued run may be stale by now (new commits, merge-gate verdict, conflict): don't spend a round on it.
     skip = prs.still_current(gh, s, pr, head)
@@ -106,6 +167,27 @@ def reviewer_guard(gh: GitHub, s: Settings, io: StepIO, pr: int, *, head: str, a
         move(gh, s, io, pr, "agent:needs-decision")
         gh.comment(pr, f"🛑 {max_rounds} review rounds without approval. Handing to the Lead.")
         io.output(stop="true")
+        return
+    _review_context(gh, s, io, pr, head=head, ignore=ignore)
+
+
+def _review_context(gh: GitHub, s: Settings, io: StepIO, pr: int, *, head: str, ignore: str) -> None:
+    """Prompt lines for the Reviewer: blocking IDs so far, what changed since the previous round, and the
+    files the design didn't plan. Each is best effort: an API error leaves its line out."""
+    done: list[Reviewed] = []
+    with contextlib.suppress(GhError):
+        done = reviewed_rounds(gh, s, pr)
+    io.output(ids=ids_so_far(done))
+    previous = done[-1].sha if done else ""
+    if previous and previous != head:
+        since_review = ".agent-out/since-review.diff"
+        with contextlib.suppress(GhError):
+            changed = prs.edits_since(gh, pr, previous, head, since_review)
+            io.output(previous=previous, since=since_review if changed and os.path.isfile(since_review) else "")
+    with contextlib.suppress(GhError):
+        extra = unplanned_files(gh, s, pr, ignore)
+        if extra:
+            io.output(unplanned=", ".join(f"`{f}`" for f in extra))
 
 
 def _qa_applies(gh: GitHub, pr: int, qa: QaRules) -> QaRules:
@@ -119,7 +201,9 @@ def _qa_applies(gh: GitHub, pr: int, qa: QaRules) -> QaRules:
 
 def reviewer_apply(gh: GitHub, s: Settings, io: StepIO, pr: int, *, head: str, raw: str, total: int, round_: int, qa: QaRules) -> None:
     qa = _qa_applies(gh, pr, qa)
-    verdict = field_of(result(raw), "verdict", "error")
+    res = result(raw)
+    verdict = field_of(res, "verdict", "error")
+    blocking = blocking_ids(res)
     if not posted(gh, s, pr, "reviewer", total):
         io.warn(f"Reviewer returned '{verdict}' but posted no summary comment")
         verdict = "missing-comment"
@@ -136,6 +220,24 @@ def reviewer_apply(gh: GitHub, s: Settings, io: StepIO, pr: int, *, head: str, r
         io.tell(f"Verdict '{verdict}' not applied: {stale}")
         progress(gh, s, f"🧐 **Reviewer** (round {round_}): verdict not applied, {stale}", pr=pr)
         return
+    if verdict == "request-changes" and not blocking:
+        io.warn("Reviewer requested changes without blocking IDs (B1, B2, …): no loop check this round")
+    # Only a real verdict has a comment of its own to record the round on (a missing one would stamp
+    # this commit onto an older round).
+    earlier = _record_round(gh, s, pr, head, blocking if verdict != "approve" else []) if verdict in ("approve", "request-changes", "needs-human") else set()
+    back = [b for b in blocking if b in earlier] if verdict == "request-changes" else []
+    if back:
+        # The same problem after a fix round: the fix didn't work or the Implementor disputed it. Another
+        # round would repeat itself, so the Lead rules on it now instead of after the round budget.
+        move(gh, s, io, pr, "agent:needs-decision")
+        listed = ", ".join(back)
+        gh.comment(
+            pr,
+            f"🔁 Blocking item{'s' if len(back) > 1 else ''} {listed} came back after a fix round: the fix didn't work, or the "
+            "Implementor disputed it. Handing to the Lead to rule on it.",
+        )
+        progress(gh, s, f"🧐 **Reviewer** (round {round_}): {listed} came back, handed to the Lead on #{pr}", pr=pr)
+        return
     if verdict == "approve":
         if qa.in_review:
             move(gh, s, io, pr, "agent:qa")
@@ -151,6 +253,18 @@ def reviewer_apply(gh: GitHub, s: Settings, io: StepIO, pr: int, *, head: str, r
             gh.comment(pr, f"⚠️ Reviewer agent failed ({run_log(s)}). Handing to the Lead.")
         msg = "unsure or failed, handed to the Lead"
     progress(gh, s, f"🧐 **Reviewer** (round {round_}): {msg} on #{pr}", pr=pr)
+
+
+def _record_round(gh: GitHub, s: Settings, pr: int, head: str, blocking: list[str]) -> set[str]:
+    """Records the commit and blocking IDs on the Reviewer's comment for this round (the newest), so later
+    rounds keep IDs stable and see what changed since. Returns the blocking IDs of the earlier rounds
+    since the latest Lead decision (a Lead ruling starts the loop check afresh)."""
+    earlier = {b for r in reviewed_rounds(gh, s, pr) if r.since_lead for b in r.blocking}
+    mine = [c for c in markers.from_bot(gh.comments(pr), s.bot) if markers.tag("reviewer") in c.body]
+    if mine and not REVIEWED.search(mine[-1].body):
+        marker = f"<!-- agent:reviewed {head} blocking={','.join(blocking) or 'none'} -->"
+        gh.edit_comment(mine[-1].id, f"{mine[-1].body.rstrip(chr(10))}\n\n{marker}")
+    return earlier
 
 
 # --- QA ----------------------------------------------------------------------------------------------

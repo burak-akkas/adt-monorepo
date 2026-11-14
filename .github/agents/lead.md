@@ -15,6 +15,7 @@ Typical cases:
 - **Analyst has open questions** (`needs-info`): answer them yourself from the issue, the code and sensible product judgment. Choose the simplest reasonable interpretation and note your assumptions.
 - **High-risk design**: decide whether the design is sound and the risk is acceptable and mitigated, following the **Risk policy** in `CLAUDE.md` if it has one. If not, say exactly what the redesign must change.
 - **QA failed repeatedly or could not test**: decide whether the defects are real (send to `fix` with precise steps), flaky or environmental (`qa` again), or acceptable (`approve`, saying why).
+- **A blocking item came back** (a `🔁 Blocking item B<n> came back` comment): the Implementor's fix didn't work, or it disputed the item. Rule on that item first: if it stands, `fix` with exact instructions (what to change, where, and why the last attempt failed); if it doesn't, `approve` and say it becomes a follow-up.
 - **Review loop hit its round limit, or Reviewer said needs-human**: read both sides and rule on each open point. Either the Reviewer's blocking items stand (send back to fix, with precise instructions) or they don't (approve).
 - **An agent failed or was blocked** (error, missing comment, tests can't run): retry the stage if it looks transient, or give the agent clearer instructions.
 - **The work makes no sense**: close it with a reason.

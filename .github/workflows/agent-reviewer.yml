@@ -4,6 +4,9 @@ name: "Agent · Reviewer"
 #   - agent PRs (branch `agent/*`) are opened, updated or marked ready
 #   - a human applies `agent:review` to any same-repo PR
 # Loop guard: after AGENT_MAX_REVIEW_ROUNDS reviewer summaries since the last Lead decision (default 3) the PR goes to the Lead (`agent:needs-decision`).
+# Stable IDs: the Reviewer numbers blocking items B1, B2, … across rounds and reuses an ID when the same
+# problem comes back; reviewer-apply records each round's commit and IDs on its comment, and a returning
+# ID (since the last Lead decision) goes to the Lead at once, without using up the round budget.
 # Where an approval goes: with QA on (AGENT_QA) and AGENT_QA_STAGE unset or `queue`, straight to the
 # merge gate, and QA tests the PR once at the front of the merge queue, on the code that lands. With
 # AGENT_QA_STAGE == 'review', to QA first (the older flow: QA before the queue).
@@ -76,6 +79,7 @@ jobs:
           QA: ${{ vars.AGENT_QA == 'true' && vars.AGENT_QA_STAGE == 'review' && 'true' || '' }}
           QA_ON_BASE_UPDATE: ${{ vars.AGENT_QA_ON_BASE_UPDATE }}
           SKIP_SAME: ${{ vars.AGENT_SKIP_REVIEW_ON_SAME_CHANGES }}
+          AGENT_CONFLICT_IGNORE: ${{ vars.AGENT_CONFLICT_IGNORE }}
         run: |
           "$BIN/agent.sh" reviewer-guard "${{ github.event.pull_request.head.sha }}" "${{ github.event.action }}"
 
@@ -95,6 +99,9 @@ jobs:
             Pull request: #${{ github.event.pull_request.number }}
             Review round: ${{ steps.guard.outputs.round }} of ${{ env.MAX_ROUNDS }}
             ${{ steps.guard.outputs.interdiff && format('Re-review: this PR was approved at {0} and has changed since, usually because the Implementor merged the default branch and resolved conflicts. {1} shows how the PR''s own added/removed lines changed since that approval. Follow "Re-review after an approval" in reviewer.md.', steps.guard.outputs.approved, steps.guard.outputs.interdiff) || '' }}
+            Blocking IDs so far: ${{ steps.guard.outputs.ids || 'none yet; next free: B1' }}
+            ${{ steps.guard.outputs.previous && format('Previous review: {0}. {1}', steps.guard.outputs.previous, steps.guard.outputs.since && format('{0} shows how the PR''s own added/removed lines changed since then.', steps.guard.outputs.since) || 'The PR''s own edits haven''t changed since then (only the base branch may have been merged in).') || '' }}
+            ${{ steps.guard.outputs.unplanned && format('Files the design did not plan: {0}. Follow "Unplanned files" in reviewer.md.', steps.guard.outputs.unplanned) || '' }}
 
             Tool rules: create files only with the Write tool (bodies go in .agent-out/, then use --body-file).
             Run every shell command on its own: no &&, ||, ;, pipes, redirects, heredocs or subshells.
@@ -104,7 +111,7 @@ jobs:
             --max-turns 40
             ${{ (vars.AGENT_REVIEWER_MODEL || vars.AGENT_MODEL) && format('--model {0}', vars.AGENT_REVIEWER_MODEL || vars.AGENT_MODEL) || '' }}
             --allowedTools "Read,Grep,Glob,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh pr comment:*),Bash(gh issue view:*),mcp__github_inline_comment__create_inline_comment"
-            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","request-changes","needs-human"]}},"required":["verdict"]}'
+            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","request-changes","needs-human"]},"blocking":{"type":"array","items":{"type":"string","pattern":"^B[1-9][0-9]*$"}}},"required":["verdict","blocking"]}'
 
       - name: Report denied tools
         if: ${{ !cancelled() && steps.agent.outputs.execution_file != '' }}
