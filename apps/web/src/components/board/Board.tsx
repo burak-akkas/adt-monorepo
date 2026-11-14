@@ -24,6 +24,7 @@ import {
   isFiltering,
   isListCollapsed,
   listCards,
+  listDueTodayCount,
   listOverdueCount,
   moveCard,
   renameCard,
@@ -370,6 +371,7 @@ function BoardContent() {
                 title={title}
                 total={listCards(board, id).length}
                 overdue={listOverdueCount(board, id)}
+                dueToday={listDueTodayCount(board, id)}
                 limit={board.wipLimits?.[id]}
                 collapsed={collapsed}
                 role={id === doneId ? "done" : id === doingId ? "doing" : undefined}

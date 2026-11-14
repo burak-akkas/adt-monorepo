@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
-import { addCard, addList, emptyBoard, moveCard, setDueDate, setWipLimit } from "@/lib/board";
+import { addCard, addList, emptyBoard, moveCard, setDueDate, setWipLimit, todayString } from "@/lib/board";
 import { saveBoard } from "../../../support/testStorage";
 import { resetBoardStore } from "@/hooks/useBoard";
 import { Board } from "@/components/board/Board";
@@ -140,6 +140,45 @@ describe("overdue badge", () => {
     saveBoard(setDueDate(moveCard(addCard(emptyBoard(), "Old", { id: "o" }), "o", "done"), "o", "2000-01-01"));
     render(<Board />);
     expect(screen.queryByText(/overdue/)).not.toBeInTheDocument();
+  });
+});
+
+describe("due today badge", () => {
+  beforeEach(() => resetBoardStore());
+
+  function dueTodayBoard() {
+    let board = addCard(emptyBoard(), "A", { id: "a" });
+    board = addCard(board, "B", { id: "b" });
+    board = addCard(board, "Late", { id: "l" });
+    board = addCard(board, "Fine", { id: "f" });
+    board = setDueDate(board, "a", todayString());
+    board = setDueDate(board, "b", todayString());
+    board = setDueDate(board, "l", "2000-01-01");
+    saveBoard(board);
+  }
+
+  it("shows 'N due today' beside the overdue badge and hides it at zero", () => {
+    dueTodayBoard();
+    render(<Board />);
+    expect(within(column("To do")).getByText("2 due today")).toBeInTheDocument();
+    expect(within(column("To do")).getByText("1 overdue")).toBeInTheDocument();
+    expect(within(column("Doing")).queryByText(/due today/)).not.toBeInTheDocument();
+  });
+
+  it("stays visible when the list is collapsed or filtered", async () => {
+    const user = userEvent.setup();
+    dueTodayBoard();
+    render(<Board />);
+    await user.type(screen.getByLabelText("Search cards"), "Fine");
+    expect(within(column("To do")).getByText("2 due today")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Collapse To do" }));
+    expect(within(column("To do")).getByText("2 due today")).toBeInTheDocument();
+  });
+
+  it("is never shown on the done list", () => {
+    saveBoard(setDueDate(moveCard(addCard(emptyBoard(), "Old", { id: "o" }), "o", "done"), "o", todayString()));
+    render(<Board />);
+    expect(screen.queryByText(/due today/)).not.toBeInTheDocument();
   });
 });
 
