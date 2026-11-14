@@ -48,15 +48,15 @@ test("shows due today and due tomorrow chips, but none for later dates or the do
   });
 
   await editCard(page, "Soon", { dueDate: today });
-  await expect(column(page, "To do").getByText("Due today")).toBeVisible();
+  await expect(column(page, "To do").getByText("Due today", { exact: true })).toBeVisible();
   await editCard(page, "Soon", { dueDate: tomorrow });
   await expect(column(page, "To do").getByText("Due tomorrow")).toBeVisible();
-  await expect(column(page, "To do").getByText("Due today")).toHaveCount(0);
+  await expect(column(page, "To do").getByText("Due today", { exact: true })).toHaveCount(0);
   await editCard(page, "Soon", { dueDate: later });
   await expect(column(page, "To do").getByText(/^Due (today|tomorrow)$/)).toHaveCount(0);
 
   await editCard(page, "Soon", { dueDate: today, list: "Done" });
-  await expect(column(page, "Done").getByText("Due today")).toHaveCount(0);
+  await expect(column(page, "Done").getByText("Due today", { exact: true })).toHaveCount(0);
 });
 
 test("quick due date buttons set the due date in the dialog", async ({ page }) => {
