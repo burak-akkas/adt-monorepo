@@ -75,10 +75,19 @@ export class MembersService {
   async remove(boardId: string, memberId: string, userId: string, email: string): Promise<void> {
     await this.findOwnedBoard(boardId, userId, email);
     // Scoped to this board, so a member id from another board is never touched.
-    const { count } = await this.prisma.boardMember.deleteMany({ where: { id: memberId, boardId } });
-    if (count === 0) {
+    const member = await this.prisma.boardMember.findFirst({ where: { id: memberId, boardId }, select: { email: true } });
+    if (!member) {
       throw new NotFoundException("Member not found");
     }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.boardMember.deleteMany({ where: { id: memberId, boardId } });
+      await this.clearAssignments(tx, boardId, member.email);
+    });
+  }
+
+  /** Drops the email's assignments on this board's cards, live (through the list) and archived. */
+  private async clearAssignments(tx: Prisma.TransactionClient, boardId: string, email: string): Promise<void> {
+    await tx.cardAssignee.deleteMany({ where: { email, card: { OR: [{ list: { boardId } }, { boardId }] } } });
   }
 
   async leave(boardId: string, userId: string, email: string): Promise<void> {
@@ -86,6 +95,10 @@ export class MembersService {
     if (board.userId === userId) {
       throw new BadRequestException("The owner can't leave");
     }
-    await this.prisma.boardMember.deleteMany({ where: { boardId, email: email.toLowerCase() } });
+    const leaving = email.toLowerCase();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.boardMember.deleteMany({ where: { boardId, email: leaving } });
+      await this.clearAssignments(tx, boardId, leaving);
+    });
   }
 }

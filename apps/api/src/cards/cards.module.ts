@@ -1,6 +1,8 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module.js";
 import { SessionGuard } from "../auth/session.guard.js";
+import { AssigneesController } from "./assignees.controller.js";
+import { AssigneesService } from "./assignees.service.js";
 import { CardsController } from "./cards.controller.js";
 import { CardsService } from "./cards.service.js";
 import { ChecklistController } from "./checklist.controller.js";
@@ -12,7 +14,7 @@ import { LabelsService } from "./labels.service.js";
 
 @Module({
   imports: [AuthModule],
-  controllers: [CardsController, ChecklistController, CommentsController, LabelsController],
-  providers: [CardsService, ChecklistService, CommentsService, LabelsService, SessionGuard],
+  controllers: [CardsController, ChecklistController, CommentsController, LabelsController, AssigneesController],
+  providers: [CardsService, ChecklistService, CommentsService, LabelsService, AssigneesService, SessionGuard],
 })
 export class CardsModule {}

@@ -117,6 +117,47 @@ describe("MembersService", () => {
     });
   });
 
+  /** The member is assigned to a live and an archived card here, and to a card on another board. */
+  const assignEverywhere = async () => {
+    const list = await prisma.boardList.create({ data: { boardId, name: "L", position: 0 } });
+    const otherList = await prisma.boardList.create({ data: { boardId: otherBoardId, name: "L", position: 0 } });
+    const live = await prisma.card.create({ data: { listId: list.id, title: "live", position: 0 } });
+    const archived = await prisma.card.create({ data: { boardId, archivedAt: new Date(), title: "old", position: 0 } });
+    const foreign = await prisma.card.create({ data: { listId: otherList.id, title: "other", position: 0 } });
+    for (const card of [live, archived, foreign]) {
+      await prisma.cardAssignee.create({ data: { cardId: card.id, email: member.email } });
+    }
+    await prisma.cardAssignee.create({ data: { cardId: live.id, email: owner.email } });
+    return { live, archived, foreign };
+  };
+
+  describe("assignments", () => {
+    it("are cleared by remove, on this board's live and archived cards only", async () => {
+      const cards = await assignEverywhere();
+      const row = await prisma.boardMember.findFirstOrThrow({ where: { boardId } });
+      await service.remove(boardId, row.id, owner.id, owner.email);
+      expect(await prisma.cardAssignee.count({ where: { cardId: cards.live.id, email: member.email } })).toBe(0);
+      expect(await prisma.cardAssignee.count({ where: { cardId: cards.archived.id } })).toBe(0);
+      expect(await prisma.cardAssignee.count({ where: { cardId: cards.live.id, email: owner.email } })).toBe(1);
+      expect(await prisma.cardAssignee.count({ where: { cardId: cards.foreign.id } })).toBe(1);
+    });
+
+    it("are cleared by leave, on this board's cards only", async () => {
+      const cards = await assignEverywhere();
+      await service.leave(boardId, member.id, member.email);
+      expect(await prisma.cardAssignee.count({ where: { cardId: cards.live.id, email: member.email } })).toBe(0);
+      expect(await prisma.cardAssignee.count({ where: { cardId: cards.archived.id } })).toBe(0);
+      expect(await prisma.cardAssignee.count({ where: { cardId: cards.foreign.id } })).toBe(1);
+    });
+
+    it("stay when remove is refused", async () => {
+      const cards = await assignEverywhere();
+      const row = await prisma.boardMember.findFirstOrThrow({ where: { boardId } });
+      await expect(service.remove(boardId, row.id, member.id, member.email)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(await prisma.cardAssignee.count({ where: { cardId: cards.live.id, email: member.email } })).toBe(1);
+    });
+  });
+
   describe("leave", () => {
     it("lets a member leave, only on that board", async () => {
       await prisma.boardMember.create({ data: { boardId: otherBoardId, email: member.email } });

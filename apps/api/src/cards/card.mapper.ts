@@ -6,6 +6,7 @@ export const cardDetails = {
   checklist: { orderBy: { position: "asc" } },
   comments: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] },
   labels: { orderBy: { position: "asc" } },
+  assignees: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] },
   activity: { orderBy: [{ at: "desc" }, { id: "desc" }], take: MAX_ACTIVITY_ENTRIES },
 } satisfies Prisma.CardInclude;
 
@@ -31,8 +32,7 @@ function toCardContent(card: CardWithDetails) {
       editedAt: comment.editedAt ? comment.editedAt.toISOString() : null,
     })),
     labels: card.labels.map((label) => label.name),
-    // Placeholder until assignees are stored.
-    assignees: [] as string[],
+    assignees: card.assignees.map((assignee) => assignee.email),
     activity: card.activity
       .filter((entry): entry is typeof entry & { type: CardResponse["activity"][number]["type"] } => knownActivityTypes.includes(entry.type))
       .map((entry) => ({

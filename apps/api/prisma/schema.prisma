@@ -225,6 +225,7 @@ model Card {
   comments  CardComment[]
   labels    CardLabel[]
   activity  CardActivity[]
+  assignees CardAssignee[]
 
   @@index([listId, position])
   @@index([boardId, archivedAt])
@@ -269,6 +270,19 @@ model CardLabel {
 
   @@index([cardId, position])
   @@map("card_label")
+}
+
+// Who a card is assigned to, by lower-cased email: the board's owner or one of its members.
+model CardAssignee {
+  id        String   @id @default(uuid())
+  cardId    String
+  card      Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  email     String
+  createdAt DateTime @default(now())
+
+  @@unique([cardId, email])
+  @@index([email])
+  @@map("card_assignee")
 }
 
 // `type` is validated by the contract enum. `from`/`to` are list ids for `moved`, old/new values otherwise.
