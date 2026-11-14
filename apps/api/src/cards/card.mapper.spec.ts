@@ -98,6 +98,23 @@ describe("toCard", () => {
     expect(card.activity.map((entry) => entry.type)).toEqual(["archived", "restored", "checklistDone", "duplicated"]);
     expect(card.activity[2]).toMatchObject({ to: "Write tests" });
   });
+
+  it("keeps the assigned and unassigned activity types", () => {
+    const at = new Date("2026-03-01T00:00:00.000Z");
+    const card = toCard({
+      ...base,
+      activity: [
+        { id: "a1", cardId: "c1", type: "assigned", at, from: null, to: "a@example.test" },
+        { id: "a2", cardId: "c1", type: "unassigned", at, from: null, to: "a@example.test" },
+      ],
+    });
+    expect(card.activity.map((entry) => entry.type)).toEqual(["assigned", "unassigned"]);
+    expect(card.activity[0]).toMatchObject({ to: "a@example.test" });
+  });
+
+  it("returns no assignees for now", () => {
+    expect(toCard(base).assignees).toEqual([]);
+  });
 });
 
 describe("toArchivedCard", () => {

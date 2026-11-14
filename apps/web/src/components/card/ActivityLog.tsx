@@ -34,6 +34,10 @@ export function describeActivity(entry: ActivityEntry, board?: Board): string {
       return `Completed checklist item “${entry.to ?? ""}”`;
     case "duplicated":
       return `created as a copy of ${entry.from ?? ""}`;
+    case "assigned":
+      return `Assigned to ${entry.to ?? ""}`;
+    case "unassigned":
+      return `Unassigned ${entry.to ?? ""}`;
   }
 }
 

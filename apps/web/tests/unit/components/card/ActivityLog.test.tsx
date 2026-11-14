@@ -17,6 +17,8 @@ const entries: ActivityEntry[] = [
   { id: "8", at: at(8), type: "title", from: "A", to: "B" },
   { id: "9", at: at(9), type: "moved", from: "todo", to: "doing" },
   { id: "10", at: at(10), type: "created" },
+  { id: "11", at: at(11), type: "assigned", to: "a@example.test" },
+  { id: "12", at: at(12), type: "unassigned", to: "a@example.test" },
 ];
 
 describe("<ActivityLog />", () => {
@@ -34,6 +36,8 @@ describe("<ActivityLog />", () => {
       "Title changed from “A” to “B”",
       "Moved from To do to Doing",
       "Created",
+      "Assigned to a@example.test",
+      "Unassigned a@example.test",
     ]);
   });
 

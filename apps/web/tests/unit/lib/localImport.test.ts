@@ -116,7 +116,7 @@ describe("toImportRequest", () => {
     board.columns.todo[1] = { ...board.columns.todo[1], activity: types };
     const parsed = importBoardRequestSchema.parse(toImportRequest(entry("b1", "Work", board), key));
     expect(parsed.lists[0].cards[1].activity?.map((a) => a.type)).toEqual([...ACTIVITY_TYPES]);
-    expect(ACTIVITY_TYPES).toHaveLength(10);
+    expect(ACTIVITY_TYPES).toHaveLength(12);
   });
 
   it("dates archived cards by their newest archived entry, else their creation", () => {

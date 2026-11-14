@@ -19,6 +19,8 @@ export const activityTypes = [
   "restored",
   "checklistDone",
   "duplicated",
+  "assigned",
+  "unassigned",
 ] as const;
 
 export const priorities = ["low", "medium", "high"] as const;
@@ -70,6 +72,9 @@ export const addCommentRequestSchema = z.object({ text: commentTextSchema });
 export const editCommentRequestSchema = z.object({ text: commentTextSchema });
 export const addLabelRequestSchema = z.object({ name: labelNameSchema });
 
+export const assigneeEmailSchema = z.string().trim().toLowerCase().email();
+export const addAssigneeRequestSchema = z.object({ email: assigneeEmailSchema });
+
 export const checklistItemSchema = z.object({
   id: z.string(),
   text: z.string().max(MAX_CHECKLIST_ITEM_LENGTH),
@@ -85,6 +90,7 @@ export const commentSchema = z.object({
 });
 
 // `from` and `to` are list ids for `moved` and old/new values for `title`, `priority` and `dueDate`; omitted when empty.
+// `assigned` and `unassigned` keep the assignee's lower-cased email in `to`.
 export const activityEntrySchema = z.object({
   id: z.string(),
   at: z.string(),
@@ -106,6 +112,8 @@ export const cardResponseSchema = z.object({
   checklist: z.array(checklistItemSchema),
   comments: z.array(commentSchema),
   labels: z.array(z.string().max(MAX_LABEL_LENGTH)),
+  // Lower-cased emails of the people the card is assigned to.
+  assignees: z.array(z.string()).default([]),
   activity: z.array(activityEntrySchema).max(MAX_ACTIVITY_ENTRIES),
 });
 
@@ -117,6 +125,7 @@ export type MoveCardRequest = z.infer<typeof moveCardRequestSchema>;
 export type AddCommentRequest = z.infer<typeof addCommentRequestSchema>;
 export type EditCommentRequest = z.infer<typeof editCommentRequestSchema>;
 export type AddLabelRequest = z.infer<typeof addLabelRequestSchema>;
+export type AddAssigneeRequest = z.infer<typeof addAssigneeRequestSchema>;
 export type ActivityType = (typeof activityTypes)[number];
 export type ChecklistItem = z.infer<typeof checklistItemSchema>;
 export type Comment = z.infer<typeof commentSchema>;
