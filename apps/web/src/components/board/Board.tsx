@@ -15,6 +15,7 @@ import {
   duplicateCard,
   filterByLabel,
   filterCards,
+  filterDueToday,
   filterOverdue,
   findCard,
   type Card,
@@ -83,13 +84,16 @@ function BoardContent() {
   // It is also ignored while the summary is collapsed, since its control is hidden then.
   const [summaryCollapsed, setSummaryCollapsed] = useSummaryCollapsed();
   const showOverdueOnly = overdueOnly && stats.overdue > 0 && !summaryCollapsed;
+  const [dueTodayOnly, setDueTodayOnly] = useState(false);
+  const showDueTodayOnly = dueTodayOnly && stats.dueToday > 0 && !summaryCollapsed;
   const [labelFilter, setLabelFilter] = useState<string | null>(null);
   const labelsInUse = boardLabels(board);
   // Like the overdue filter, the label filter lapses once no card has the label any more.
   const activeLabel =
     labelFilter !== null && labelsInUse.some((l) => l.toLowerCase() === labelFilter.toLowerCase()) ? labelFilter : null;
-  const visible = filterByLabel(filterCards(showOverdueOnly ? filterOverdue(board) : board, query), activeLabel);
-  const filtering = isFiltering(query) || showOverdueOnly || activeLabel !== null;
+  const base = showOverdueOnly ? filterOverdue(board) : showDueTodayOnly ? filterDueToday(board) : board;
+  const visible = filterByLabel(filterCards(base, query), activeLabel);
+  const filtering = isFiltering(query) || showOverdueOnly || showDueTodayOnly || activeLabel !== null;
   const [dragOver, setDragOver] = useState<ColumnId | null>(null);
   const dragSource = useRef<{ id: string; column: ColumnId } | null>(null);
 
@@ -265,10 +269,21 @@ function BoardContent() {
       <SummaryBar
         stats={stats}
         overdueOnly={showOverdueOnly}
-        onToggleOverdue={() => setOverdueOnly(!showOverdueOnly)}
+        onToggleOverdue={() => {
+          setOverdueOnly(!showOverdueOnly);
+          setDueTodayOnly(false);
+        }}
+        dueTodayOnly={showDueTodayOnly}
+        onToggleDueToday={() => {
+          setDueTodayOnly(!showDueTodayOnly);
+          setOverdueOnly(false);
+        }}
         collapsed={summaryCollapsed}
         onToggleCollapsed={() => {
-          if (!summaryCollapsed) setOverdueOnly(false);
+          if (!summaryCollapsed) {
+            setOverdueOnly(false);
+            setDueTodayOnly(false);
+          }
           setSummaryCollapsed(!summaryCollapsed);
         }}
       />
