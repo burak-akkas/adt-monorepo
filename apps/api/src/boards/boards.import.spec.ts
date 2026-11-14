@@ -71,7 +71,7 @@ describe("buildBoardImport", () => {
     expect(card.comments.create[0].text).toBe("c");
   });
 
-  it("keeps activity entries of all 10 types", () => {
+  it("keeps activity entries of all 12 types", () => {
     const result = buildBoardImport(
       snapshot({
         lists: [
@@ -91,7 +91,7 @@ describe("buildBoardImport", () => {
     );
     const list = (result.create.lists as { create: Record<string, any>[] }).create[0];
     const activity = list.cards.create[0].activity.create as { type: string }[];
-    expect(activityTypes).toHaveLength(10);
+    expect(activityTypes).toHaveLength(12);
     expect(activity.map((entry) => entry.type)).toEqual([...activityTypes]);
   });
 

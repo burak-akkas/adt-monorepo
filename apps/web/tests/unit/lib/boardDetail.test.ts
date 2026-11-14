@@ -19,6 +19,7 @@ function card(id: string, position: number, extra: Record<string, unknown> = {})
     checklist: [],
     comments: [],
     labels: [],
+    assignees: [],
     activity: [],
     ...extra,
   };
@@ -76,6 +77,7 @@ function boardToDetail(board: Board): BoardDetail {
     position,
     createdAt: c.createdAt,
     labels: c.labels ?? [],
+    assignees: [],
     checklist: (c.checklist ?? []).map((item, index) => ({ ...item, position: index })),
     comments: (c.comments ?? []).map((m) => ({ id: m.id, text: m.text, createdAt: m.createdAt, editedAt: m.editedAt ?? null })),
     activity: c.activity ?? [],

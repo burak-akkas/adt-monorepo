@@ -31,6 +31,8 @@ function toCardContent(card: CardWithDetails) {
       editedAt: comment.editedAt ? comment.editedAt.toISOString() : null,
     })),
     labels: card.labels.map((label) => label.name),
+    // Placeholder until assignees are stored.
+    assignees: [] as string[],
     activity: card.activity
       .filter((entry): entry is typeof entry & { type: CardResponse["activity"][number]["type"] } => knownActivityTypes.includes(entry.type))
       .map((entry) => ({

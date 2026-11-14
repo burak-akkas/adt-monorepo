@@ -26,6 +26,8 @@ export interface Card {
   comments?: CardComment[];
   // Optional change log, newest first, at most MAX_ACTIVITY_ENTRIES entries.
   activity?: ActivityEntry[];
+  // Optional lower-cased emails of the people the card is assigned to (set by the server).
+  assignees?: string[];
 }
 
 export interface ChecklistItem {
@@ -52,7 +54,9 @@ export type ActivityType =
   | "archived"
   | "restored"
   | "checklistDone"
-  | "duplicated";
+  | "duplicated"
+  | "assigned"
+  | "unassigned";
 
 export interface ActivityEntry {
   id: string;
@@ -60,6 +64,7 @@ export interface ActivityEntry {
   at: string;
   type: ActivityType;
   // Column ids for `moved`; old/new value for `title`, `priority` and `dueDate` (omitted when empty).
+  // `assigned` and `unassigned` keep the assignee's lower-cased email in `to`.
   // `checklistDone` keeps the item text in `to`. `duplicated` keeps the source card's title in `from`. `description` stores no text.
   from?: string;
   to?: string;
@@ -176,6 +181,8 @@ export const ACTIVITY_TYPES: readonly ActivityType[] = [
   "restored",
   "checklistDone",
   "duplicated",
+  "assigned",
+  "unassigned",
 ];
 
 export interface ActivityOptions {
