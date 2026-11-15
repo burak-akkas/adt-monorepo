@@ -14,6 +14,8 @@ in turn, so only one PR is being merged at any time):
      a human merges it, but only once the queue has tested it like any other.
 
 Conflicts and red checks go to the Implementor, timeouts and failed merges to the back of the queue.
+Red checks on a commit whose failure was already reported, approved again since (the Lead or a human
+judged it flaky), are re-run once instead: the old result would only fail the PR the same way again.
 Red checks, timeouts and failed merges are failed attempts: after max_attempts since the last Lead
 decision, the Lead decides. Conflicts don't count: they come from other PRs' merges.
 
@@ -25,6 +27,7 @@ pass), lead.
 from __future__ import annotations
 
 import contextlib
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Literal
@@ -37,6 +40,7 @@ from agentflow.states import progress, transition
 
 Result = Literal["merged", "handed", "bounced", "requeued", "left", "lead"]
 METHODS = ("squash", "merge", "rebase")
+RUN_ID = re.compile(r"/actions/runs/(\d+)")
 STOPS_QA = ("agent:changes-requested", "agent:fixing", "agent:needs-decision", "agent:needs-human", "agent:review")
 
 
@@ -101,6 +105,7 @@ class _Integration:
     issue: int | None = None
     required: str = ""
     recovering: bool = False  # after an unexpected error: GitHub errors no longer stop the run
+    rerun: Callable[[int], None] | None = None  # re-runs a workflow run's failed jobs (needs actions: write)
     _pending: list[str] = field(default_factory=list)
 
     # --- small steps ---------------------------------------------------------------------------------
@@ -449,6 +454,8 @@ class _Integration:
         """3. The required checks on exactly that commit."""
         pr, base = self.pr, self.base
         outcome, failed = self.wait_checks(head)
+        if outcome == "fail" and self.rerun_once(head):
+            outcome, failed = self.wait_checks(head)
         if outcome == "moved":
             self.leave_if_draft()
             self.log(f"#{pr}: the PR changed while its checks ran")
@@ -472,6 +479,39 @@ class _Integration:
             )
             self.note(f"🚦 **Merge queue**: no required check reported on #{pr}, a human must check `AGENT_REQUIRED_CHECKS`")
             self.finish("left")
+
+    def rerun_once(self, head: str) -> bool:
+        """Re-runs the failed required checks on `head`, once per commit, when their failure was already
+        reported and the same commit was approved again since: without a new run, `gh pr checks` keeps the
+        old result and the PR fails the same way (seen on #107, where the Lead's approval of a flaky e2e
+        failure only bounced it again). True if a re-run started."""
+        if self.rerun is None:
+            return False
+        mine = markers.from_bot(self.gh.comments(self.pr), self.s.bot)
+        reported = markers.last_index(mine, f"required checks failed on `{head[:7]}`")
+        done = f"<!-- agent:checks-rerun {head} -->"
+        # A bounced PR only comes back to the queue through a new approval (the Lead's or a human's), and
+        # check_approval already confirmed it is for this commit: so a reported failure here was overruled.
+        if reported < 0 or any(done in c.body for c in mine):
+            return False
+        wanted = {w.strip() for w in self.required.split(",")}
+        failed = [c.link for c in self.gh.pr_checks(self.pr) if c.workflow in wanted and c.bucket in ("fail", "cancel")]
+        runs = sorted({int(m.group(1)) for link in failed for m in [RUN_ID.search(link)] if m})
+        if not runs:
+            return False
+        try:
+            for run in runs:
+                self.rerun(run)
+        except GhError as e:
+            self.log(f"#{self.pr}: couldn't re-run the failed checks: {e}")
+            return False
+        self.say(
+            f"{done}\n🔁 **Merge queue:** the required checks on `{head[:7]}` failed before, and this same commit was approved "
+            f"again since. Re-running the failed jobs once ({', '.join(f'run {r}' for r in runs)}) instead of reading the old result."
+        )
+        self.log(f"#{self.pr}: re-running failed runs {runs} on {head[:7]}")
+        self.clock.sleep(30)  # let GitHub mark the jobs as queued before the checks are read again
+        return True
 
     _merge_error: str = ""
 
@@ -505,9 +545,10 @@ def integrate(
     clock: Clock | None = None,
     log: Callable[[str], None],
     refresh_token: Callable[[], None] = lambda: None,
+    rerun: Callable[[int], None] | None = None,
 ) -> Result:
     """Integrates one queued PR (see the module docs) and returns the result."""
-    job = _Integration(gh, s, pr, cfg, clock or SystemClock(), log, refresh_token)
+    job = _Integration(gh, s, pr, cfg, clock or SystemClock(), log, refresh_token, rerun=rerun)
     try:
         job.run()
     except _Finish as f:
@@ -534,6 +575,7 @@ def drain(
     detail: Callable[[str], None] | None = None,
     clock: Clock | None = None,
     refresh_token: Callable[[], None] = lambda: None,
+    rerun: Callable[[int], None] | None = None,
 ) -> None:
     """Merges the queue, one PR at a time, oldest first, each PR once per run: a PR sent to the back of
     the queue is picked up by the next run. After `drain_minutes` the rest goes to a fresh run
@@ -560,7 +602,7 @@ def drain(
         refresh_token()
         log("Queue: " + " ".join(f"#{n} ({state})" for n, state in waiting))
         try:
-            outcome: str = integrate(gh, s, nxt, cfg, clock=clock, log=detail or log, refresh_token=refresh_token)
+            outcome: str = integrate(gh, s, nxt, cfg, clock=clock, log=detail or log, refresh_token=refresh_token, rerun=rerun)
         except Exception as e:  # one PR's crash must not stop the queue
             (detail or log)(f"#{nxt}: crashed: {e!r}")
             outcome = "error"

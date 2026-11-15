@@ -10,7 +10,9 @@ name: "Agent · Integrator"
 #      queue waits, once per PR (a PR whose own changes QA already passed isn't tested again)
 #   5. Squash-merges exactly that commit, if the base hasn't moved meanwhile (else back to 2)
 # Conflicts and red checks go to the Implementor, timeouts and failed merges to the back of the queue,
-# and after AGENT_INTEGRATOR_MAX_ATTEMPTS failed attempts (default 3) the Lead decides.
+# and after AGENT_INTEGRATOR_MAX_ATTEMPTS failed attempts (default 3) the Lead decides. Red checks on a
+# commit whose failure was already reported, approved again since (a flaky test, say), are re-run once
+# with this job's GITHUB_TOKEN instead: the old result would only fail the PR the same way again.
 #
 # Why a queue: when every approved PR raced to merge on its own, each merge made every other approved
 # PR update and retest (O(N²) CI, review and QA runs for N parallel PRs), and two PRs whose checks
@@ -52,6 +54,9 @@ jobs:
     timeout-minutes: 240
     permissions:
       contents: read
+      # Only for re-running failed checks once, when the Lead or a human approved the same commit again
+      # after its checks failed (RERUN_TOKEN below). The agents' App keeps read-only Actions access.
+      actions: write
     env:
       BIN: .agent-trusted/scripts/agents
       AGENT_REQUIRED_CHECKS: ${{ vars.AGENT_REQUIRED_CHECKS || 'CI' }}
@@ -89,5 +94,6 @@ jobs:
           AGENT_APP_ID: ${{ vars.AGENT_APP_ID }}
           AGENT_APP_PRIVATE_KEY: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
           AGENT_TOKEN_CACHE: ${{ runner.temp }}/agent-app-token
+          RERUN_TOKEN: ${{ github.token }}
         run: |
           "$BIN/agent.sh" integrate-queue

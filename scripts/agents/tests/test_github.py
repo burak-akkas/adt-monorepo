@@ -3,7 +3,7 @@
 import json
 import unittest
 
-from agentflow.github import GhCli, GhError
+from agentflow.github import GhCli, GhError, rerunner
 
 
 class Runner:
@@ -131,3 +131,14 @@ class GhCliEdgeTest(unittest.TestCase):
         gh, _ = cli("", "")
         self.assertEqual(gh.labels(1), [])
         self.assertEqual(gh.open_issues("x"), [])
+
+
+class RerunnerTest(unittest.TestCase):
+    def test_reruns_only_the_failed_jobs_of_a_run(self) -> None:
+        r = Runner()
+        rerunner("o/r", "token", runner=r)(123)
+        self.assertEqual(r.calls, [["run", "rerun", "123", "--failed", "-R", "o/r"]])
+
+    def test_a_refusal_is_raised(self) -> None:
+        with self.assertRaises(GhError):
+            rerunner("o/r", "token", runner=Runner(fail="HTTP 403"))(1)

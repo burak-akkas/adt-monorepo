@@ -60,6 +60,8 @@ Verdict rules:
 
 Then return the structured result: `verdict`, and `blocking`, the IDs of this round's blocking items (an empty list when there are none). The workflow applies labels; do not change labels yourself.
 
+The only marker you write is `<!-- agent:reviewer -->` at the top. Never copy any other `<!-- agent:… -->` marker (`reviewed`, `approved-sha` and the like) into your comment, even when earlier comments show them: the workflow adds those itself.
+
 ## Re-review after an approval
 When your prompt says the PR was approved before and names an interdiff file, the PR changed after
 an approval, usually because it conflicted with the default branch and the Implementor merged it in

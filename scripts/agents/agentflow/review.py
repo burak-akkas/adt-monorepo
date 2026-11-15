@@ -54,18 +54,21 @@ class Reviewed:
     sha: str
     blocking: tuple[str, ...]
     since_lead: bool
+    comment_id: int = 0
 
 
 def reviewed_rounds(gh: GitHub, s: Settings, pr: int) -> list[Reviewed]:
-    """Every review round the bot recorded on this PR, oldest first."""
+    """Every review round the bot recorded on this PR, oldest first. reviewer-apply appends its marker
+    last, so the last one in a comment counts: one the Reviewer wrote into its own text never does."""
     mine = markers.from_bot(gh.comments(pr), s.bot)
     lead = markers.last_index(mine, markers.tag("lead"))
     found: list[Reviewed] = []
     for i, c in enumerate(mine):
-        m = REVIEWED.search(c.body) if markers.tag("reviewer") in c.body else None
-        if m:
-            ids = tuple(x for x in m.group(2).split(",") if BLOCKING_ID.fullmatch(x))
-            found.append(Reviewed(len(found) + 1, m.group(1), ids, i > lead))
+        ms = REVIEWED.findall(c.body) if markers.tag("reviewer") in c.body else []
+        if ms:
+            sha, blocking = ms[-1]
+            ids = tuple(x for x in blocking.split(",") if BLOCKING_ID.fullmatch(x))
+            found.append(Reviewed(len(found) + 1, sha, ids, i > lead, c.id))
     return found
 
 
@@ -259,9 +262,11 @@ def _record_round(gh: GitHub, s: Settings, pr: int, head: str, blocking: list[st
     """Records the commit and blocking IDs on the Reviewer's comment for this round (the newest), so later
     rounds keep IDs stable and see what changed since. Returns the blocking IDs of the earlier rounds
     since the latest Lead decision (a Lead ruling starts the loop check afresh)."""
-    earlier = {b for r in reviewed_rounds(gh, s, pr) if r.since_lead for b in r.blocking}
     mine = [c for c in markers.from_bot(gh.comments(pr), s.bot) if markers.tag("reviewer") in c.body]
-    if mine and not REVIEWED.search(mine[-1].body):
+    current = mine[-1].id if mine else None
+    # This round's comment is never an earlier round, whatever markers its text holds.
+    earlier = {b for r in reviewed_rounds(gh, s, pr) if r.since_lead and r.comment_id != current for b in r.blocking}
+    if mine:
         marker = f"<!-- agent:reviewed {head} blocking={','.join(blocking) or 'none'} -->"
         gh.edit_comment(mine[-1].id, f"{mine[-1].body.rstrip(chr(10))}\n\n{marker}")
     return earlier

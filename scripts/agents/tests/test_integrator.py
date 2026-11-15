@@ -3,6 +3,7 @@
 import unittest
 from typing import Any
 
+from agentflow.github import GhError
 from agentflow.integrator import Config, integrate
 from tests.support import FakeClock, Repo, sha
 from tests.test_states import settings
@@ -27,8 +28,8 @@ class Queue:
         self.log: list[str] = []
         self.clock = FakeClock()
 
-    def run(self, **cfg: Any) -> str:
-        return integrate(self.gh, S, 101, Config(**cfg), clock=self.clock, log=self.log.append)
+    def run(self, rerun: Any = None, **cfg: Any) -> str:
+        return integrate(self.gh, S, 101, Config(**cfg), clock=self.clock, log=self.log.append, rerun=rerun)
 
     def last(self) -> str:
         return self.gh.bodies(101)[-1]
@@ -241,6 +242,56 @@ class FailuresTest(unittest.TestCase):
         q.gh.checks("fail")
         q.gh.set(101, state="MERGED")
         self.assertEqual(q.run(), "left")  # merged before the run looked: nothing to do
+
+
+class RerunTest(unittest.TestCase):
+    """A failure the queue already reported on this commit, approved again since (the Lead judged it flaky):
+    the failed jobs run once more, instead of the old result failing the PR the same way (#107)."""
+
+    def setUp(self) -> None:
+        self.q = Queue()
+        self.q.gh.checks("fail")
+        self.reruns: list[int] = []
+
+    def rerun(self, run_id: int) -> None:
+        self.reruns.append(run_id)
+        self.q.gh.checks("pass", sha=self.q.head)  # the re-run passes
+
+    def reported(self) -> None:
+        self.q.gh.say(101, f"<!-- agent:merge -->\n<!-- agent:integration-failed -->\n❌ required checks failed on `{self.q.head[:7]}`: e2e")
+        self.q.gh.say(101, f"<!-- agent:lead -->\n**Decision:** approve\n<!-- agent:approved-sha {self.q.head} -->")
+
+    def test_a_reported_failure_approved_again_reruns_once_and_merges(self) -> None:
+        self.reported()
+        self.assertEqual(self.q.run(rerun=self.rerun), "merged")
+        self.assertEqual(self.reruns, [int(self.q.head[:7], 16)])
+        rerun_note = next(b for b in self.q.gh.bodies(101) if "agent:checks-rerun" in b)
+        self.assertIn(f"<!-- agent:checks-rerun {self.q.head} -->", rerun_note)
+        self.assertIn(f"run {self.reruns[0]}", rerun_note)
+
+    def test_a_first_failure_is_not_rerun(self) -> None:
+        self.assertEqual(self.q.run(rerun=self.rerun), "bounced")
+        self.assertEqual(self.reruns, [])
+
+    def test_only_once_per_commit(self) -> None:
+        self.reported()
+        self.q.gh.say(101, f"<!-- agent:checks-rerun {self.q.head} -->\nre-ran before")
+        self.assertEqual(self.q.run(rerun=self.rerun), "bounced")
+        self.assertEqual(self.reruns, [])
+
+    def test_without_a_token_or_when_the_rerun_is_refused_it_bounces_as_before(self) -> None:
+        self.reported()
+        self.assertEqual(self.q.run(), "bounced")
+
+        def refused(run_id: int) -> None:
+            raise GhError("HTTP 403: Resource not accessible by integration")
+
+        q2 = Queue()
+        q2.gh.checks("fail")
+        self.q = q2
+        self.reported()
+        self.assertEqual(q2.run(rerun=refused), "bounced")
+        self.assertTrue(any("couldn't re-run the failed checks: HTTP 403" in line for line in q2.log), q2.log)
 
 
 class QaInTheQueueTest(unittest.TestCase):

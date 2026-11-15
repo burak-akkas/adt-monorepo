@@ -39,7 +39,7 @@ from agentflow import (
 )
 from agentflow.clock import SystemClock
 from agentflow.config import ConfigError, Settings
-from agentflow.github import GhCli, GhError, GitHub
+from agentflow.github import GhCli, GhError, GitHub, rerunner
 from agentflow.issues import SplitError
 
 
@@ -314,6 +314,13 @@ def _release_waiting(ctx: Context, a: argparse.Namespace) -> None:
 
 
 # --- the merge queue itself and operations ----------------------------------------------------------------
+def _rerun(ctx: Context) -> Callable[[int], None] | None:
+    """RERUN_TOKEN: the Integrator job's own GITHUB_TOKEN (actions: write), for re-running failed checks.
+    Unset: no re-runs, as before."""
+    token = ctx.env.get("RERUN_TOKEN", "")
+    return rerunner(ctx.settings.repo, token) if token else None
+
+
 @command("integrate", "the Integrator's work on one queued PR; the last stdout line is result=<merged|bounced|requeued|left|lead>", PR)
 def _integrate(ctx: Context, a: argparse.Namespace) -> None:
     clock = SystemClock()
@@ -328,7 +335,7 @@ def _integrate(ctx: Context, a: argparse.Namespace) -> None:
                 os.environ["GH_TOKEN"] = token
 
     cfg = integrator.Config.from_env(ctx.env, warn=log)
-    result = integrator.integrate(ctx.gh, ctx.settings, a.pr, cfg, clock=clock, log=log, refresh_token=refresh_token)
+    result = integrator.integrate(ctx.gh, ctx.settings, a.pr, cfg, clock=clock, log=log, refresh_token=refresh_token, rerun=_rerun(ctx))
     ctx.print(f"result={result}")
 
 
@@ -601,7 +608,8 @@ def _integrate_queue(ctx: Context, a: argparse.Namespace) -> None:
 
     cfg = integrator.Config.from_env(ctx.env, warn=log)
     integrator.drain(
-        ctx.gh, ctx.settings, cfg, drain_minutes=_n(ctx, "DRAIN_MINUTES", 100), note=io.note, log=io.say, detail=log, clock=clock, refresh_token=refresh_token
+        ctx.gh, ctx.settings, cfg, drain_minutes=_n(ctx, "DRAIN_MINUTES", 100), note=io.note, log=io.say, detail=log, clock=clock, refresh_token=refresh_token,
+        rerun=_rerun(ctx),
     )  # fmt: skip
 
 
