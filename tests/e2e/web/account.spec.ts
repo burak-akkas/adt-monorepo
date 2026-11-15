@@ -12,7 +12,15 @@ const register = async (page: Page, email: string) => {
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Register", exact: true }).click();
+  await settleOnBoard(page);
+};
+
+// Ready means: the client-side navigation to the board is done, the session shows in the top bar, and the
+// requests the board page started on arrival have finished, so a later click cannot land in a re-render.
+const settleOnBoard = async (page: Page) => {
+  await expect(page).toHaveURL(/\/(\?.*)?$/);
   await expect(page.getByRole("button", { name: "Log out" })).toBeVisible();
+  await page.waitForLoadState("networkidle");
 };
 
 const login = async (page: Page, email: string, password: string) => {
@@ -24,6 +32,7 @@ const login = async (page: Page, email: string, password: string) => {
 
 const openAccount = async (page: Page) => {
   await page.getByRole("link", { name: "Account", exact: true }).click();
+  await expect(page).toHaveURL(/\/account$/);
   await expect(page.getByRole("heading", { name: "Account", level: 1 })).toBeVisible();
 };
 
@@ -37,7 +46,7 @@ test("the account page shows the email", async ({ page }) => {
   const email = uniqueEmail();
   await register(page, email);
   await openAccount(page);
-  await expect(page.getByText(email)).toBeVisible();
+  await expect(page.getByText(`Signed in as ${email}`)).toBeVisible();
 });
 
 test("change password: errors, then success keeps this session and ends other ones", async ({ page, browser, baseURL }) => {
