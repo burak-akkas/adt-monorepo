@@ -22,7 +22,7 @@ test("Delete completed removes ticked items, keeps the rest and persists", async
   await deleteCompleted.focus();
   await page.keyboard.press("Enter");
 
-  await expect(dialog.getByRole("checkbox")).toHaveCount(1);
+  await expect(dialog.getByRole("list", { name: "Checklist items" }).getByRole("checkbox")).toHaveCount(1);
   await expect(dialog.getByRole("checkbox", { name: "Two" })).not.toBeChecked();
   await expect(deleteCompleted).toBeDisabled();
 
@@ -32,6 +32,6 @@ test("Delete completed removes ticked items, keeps the rest and persists", async
 
   await page.getByRole("button", { name: "Weekly", exact: true }).click();
   const reopened = page.getByRole("dialog", { name: "Weekly" });
-  await expect(reopened.getByRole("checkbox")).toHaveCount(1);
+  await expect(reopened.getByRole("list", { name: "Checklist items" }).getByRole("checkbox")).toHaveCount(1);
   await expect(reopened.getByRole("checkbox", { name: "Two" })).toBeVisible();
 });

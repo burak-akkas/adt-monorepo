@@ -17,6 +17,11 @@ import { resetBoardStore } from "@/hooks/useBoard";
 import { resetCommentOrderStore } from "@/hooks/useCommentOrder";
 import { COMMENT_ORDER_KEY } from "@/lib/commentOrder";
 import { Board } from "@/components/board/Board";
+
+// Keep the real better-auth session client (and its timers) out of these board tests.
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({ status: "anonymous", user: null, logout: vi.fn() }),
+}));
 import { CardComments } from "@/components/card/CardComments";
 
 // Holds the comments in state through the pure lib functions, like the dialog does through the board.

@@ -1,3 +1,4 @@
+import { isAssignedTo } from "./assignees";
 import { dueStatus, isOverdue, todayString } from "./dates";
 import { boardLists, insightsListIds, listCards, mapLists } from "./lists";
 import type { Board, BoardStats } from "./types";
@@ -55,6 +56,20 @@ export function listDueTodayCount(board: Board, listId: string, today: string = 
 export function filterOverdue(board: Board, today: string = todayString()): Board {
   const doneId = insightsListIds(board).done ?? null;
   return mapLists(board, (cards, id) => cards.filter((c) => isOverdue(c, id, today, doneId)));
+}
+
+// Only the cards assigned to this email (case-insensitive).
+export function filterAssignedTo(board: Board, email: string): Board {
+  return mapLists(board, (cards) => cards.filter((c) => isAssignedTo(c, email)));
+}
+
+// How many cards on the board are assigned to this email.
+export function countAssignedTo(board: Board, email: string): number {
+  let count = 0;
+  for (const { id } of boardLists(board)) {
+    count += listCards(board, id).filter((c) => isAssignedTo(c, email)).length;
+  }
+  return count;
 }
 
 // Only the cards due today (not overdue, not in the done list).

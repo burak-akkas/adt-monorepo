@@ -6,6 +6,11 @@ import { saveBoard } from "../../../support/testStorage";
 import { resetBoardStore } from "@/hooks/useBoard";
 import { Board } from "@/components/board/Board";
 
+// Keep the real better-auth session client (and its timers) out of these board tests.
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({ status: "anonymous", user: null, logout: vi.fn() }),
+}));
+
 function seed(items: string[] = []) {
   let board = addCard(emptyBoard(), "Plain", { id: "p" });
   board = addCard(board, "Task", { id: "t" });
