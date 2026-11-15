@@ -13,6 +13,11 @@ vi.mock("@/hooks/useBoard", async () => {
 
 import { Board } from "@/components/board/Board";
 
+// Keep the real better-auth session client (and its timers) out of these board tests.
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({ status: "anonymous", user: null, logout: vi.fn() }),
+}));
+
 describe("<Board /> while the boards load", () => {
   it("shows a loading message and no way to add a card", () => {
     state.ready = false;

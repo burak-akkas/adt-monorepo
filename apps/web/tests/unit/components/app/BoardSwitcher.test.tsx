@@ -2,6 +2,11 @@ import { act, createEvent, fireEvent, render, screen, waitFor, waitForElementToB
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Board } from "@/components/board/Board";
+
+// Keep the real better-auth session client (and its timers) out of these board tests.
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({ status: "anonymous", user: null, logout: vi.fn() }),
+}));
 import { BoardSwitcher } from "@/components/app/BoardSwitcher";
 import { resetBoardStore } from "@/hooks/useBoard";
 
