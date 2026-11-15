@@ -1,10 +1,15 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { addCard, emptyBoard, moveCard, setWipLimit, toggleListCollapsed } from "@/lib/board";
 import { saveBoard } from "../../../support/testStorage";
 import { resetBoardStore } from "@/hooks/useBoard";
 import { Board } from "@/components/board/Board";
+
+// Keep the real better-auth session client (and its timers) out of these board tests.
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({ status: "anonymous", user: null, logout: vi.fn() }),
+}));
 
 function seed(collapsed = false) {
   let board = addCard(addCard(emptyBoard(), "A", { id: "a" }), "B", { id: "b" });

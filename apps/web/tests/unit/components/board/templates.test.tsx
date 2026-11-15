@@ -7,6 +7,11 @@ import { saveBoard } from "../../../support/testStorage";
 import { resetBoardStore } from "@/hooks/useBoard";
 import { Board } from "@/components/board/Board";
 
+// Keep the real better-auth session client (and its timers) out of these board tests.
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({ status: "anonymous", user: null, logout: vi.fn() }),
+}));
+
 function boardWithTemplate() {
   let board = addCard(emptyBoard(), "Release", { id: "c1" });
   board = updateCard(board, "c1", {
@@ -51,7 +56,7 @@ describe("<Board /> templates", () => {
     await user.click(screen.getByRole("button", { name: "Plan trip" }));
     const dialog = screen.getByRole("dialog", { name: "Plan trip" });
     await user.click(within(dialog).getByRole("button", { name: "Save as template" }));
-    expect(within(dialog).getByRole("status")).toHaveTextContent('Saved template "Plan trip"');
+    expect(within(dialog).getByText('Saved template "Plan trip".')).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(screen.getByLabelText("From template")).toBeInTheDocument();
   });

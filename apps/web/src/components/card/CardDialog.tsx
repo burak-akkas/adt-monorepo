@@ -6,6 +6,7 @@ import {
   addComment,
   addDays,
   addLabelToList,
+  assignToCard,
   boardLists,
   COVER_COLORS,
   DEFAULT_LISTS,
@@ -19,6 +20,7 @@ import {
   relativeDueHint,
   removeLabelFromList,
   todayString,
+  unassignFromCard,
   type Board,
   type Card,
   type CardEdits,
@@ -29,6 +31,7 @@ import {
 import { coverStyles } from "./coverColors";
 
 import { ActivityLog } from "./ActivityLog";
+import { AssigneePicker } from "./AssigneePicker";
 import { CardComments } from "./CardComments";
 import { ChecklistSection } from "./ChecklistSection";
 import { LabelChip } from "./LabelChip";
@@ -59,9 +62,12 @@ export function CardDialog({
   onChecklist,
   onUpdateBoard,
   board,
+  boardId = null,
 }: {
   card: Card;
   column: ColumnId;
+  // The server board, for the list of people to assign. Without it the assignee picker is hidden.
+  boardId?: string | null;
   // The board the card is on, for its lists. Without it the default three lists are offered.
   board?: Board;
   onChecklist?: (change: (board: Board) => Board) => void;
@@ -354,6 +360,16 @@ export function CardDialog({
             </p>
           )}
         </div>
+
+        {/* Assigning applies immediately, like comments; it is not part of the draft or the discard prompt. */}
+        {boardId !== null && (
+          <AssigneePicker
+            boardId={boardId}
+            assignees={card.assignees ?? []}
+            onAssign={(email) => onUpdateBoard((b) => assignToCard(b, card.id, email))}
+            onUnassign={(email) => onUpdateBoard((b) => unassignFromCard(b, card.id, email))}
+          />
+        )}
 
         {onChecklist && <ChecklistSection card={card} onChange={onChecklist} />}
 

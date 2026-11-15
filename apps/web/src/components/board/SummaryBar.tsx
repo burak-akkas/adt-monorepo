@@ -9,6 +9,9 @@ export function SummaryBar({
   onToggleOverdue,
   dueTodayOnly,
   onToggleDueToday,
+  assignedToMeCount,
+  assignedToMeOnly,
+  onToggleAssignedToMe,
   collapsed,
   onToggleCollapsed,
 }: {
@@ -17,6 +20,9 @@ export function SummaryBar({
   onToggleOverdue: () => void;
   dueTodayOnly: boolean;
   onToggleDueToday: () => void;
+  assignedToMeCount: number;
+  assignedToMeOnly: boolean;
+  onToggleAssignedToMe: () => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }) {
@@ -90,6 +96,21 @@ export function SummaryBar({
           </button>
         ) : (
           <p>Due today: 0</p>
+        )}
+        {assignedToMeCount > 0 && (
+          <button
+            type="button"
+            aria-pressed={assignedToMeOnly}
+            aria-label={`Assigned to me: ${assignedToMeCount}. ${assignedToMeOnly ? "Show all cards" : "Show only cards assigned to me"}`}
+            onClick={onToggleAssignedToMe}
+            className={`rounded-md border px-2 py-0.5 font-medium ${
+              assignedToMeOnly
+                ? "border-sky-600 bg-sky-600 text-white dark:border-sky-500 dark:bg-sky-500 dark:text-zinc-950"
+                : "border-sky-300 bg-sky-50 text-sky-800 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-300 dark:hover:bg-sky-950"
+            }`}
+          >
+            Assigned to me: {assignedToMeCount}
+          </button>
         )}
         <p>High priority open: {stats.highOpen}</p>
       </div>
