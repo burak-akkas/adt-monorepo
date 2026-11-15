@@ -34,7 +34,7 @@
   them** pass.
 - Package-specific conventions go in a `CLAUDE.md` inside that package; agents read it when they work there.
 - Services the tests need (database, queue): <how they start, e.g. `docker compose up -d db`; the repo
-  variable `AGENT_SETUP_COMMAND` starts them on the agents' runners>.
+  variable `AGENT_SETUP_COMMAND` starts them on the agents' runners, and applies the migrations and seed data the tests need>.
 
 ## Conventions
 - <language/style rules a linter does not enforce>

@@ -18,7 +18,7 @@ A Kanban board (To do / Doing / Done), with accounts on the way: **NestJS 12 API
 - Build: `npm run build`
 - Everything except e2e: `npm run check`
 - New migration: `npm run db:migrate:dev -w apps/api -- --name <name>`
-- E2E: `npx playwright test`. It starts the stack itself if it isn't running. The agents' runners already have the database up; elsewhere, run `docker compose up -d --wait db` first.
+- E2E: `npx playwright test`. It starts the stack itself if it isn't running. The agents' runners already have the database up, migrated and seeded (`AGENT_SETUP_COMMAND`); elsewhere, run `docker compose up -d --wait db` first, and `npm run db:migrate:deploy -w apps/api` before the API tests.
 
 Run every command on its own, from the repository root. No `cd x && …`.
 
